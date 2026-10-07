@@ -118,10 +118,14 @@ docker compose up -d          # artex 이미지 + postgres 를 함께 기동
 
 #### Windows 사용자 범위 설치
 
-관리자 권한이나 Docker 없이 한국어판을 소스에서 빌드하려면 PowerShell에서 다음을
-실행합니다. Node.js/npm은 미리 설치되어 있어야 합니다. 스크립트는 공식 Go ZIP과
-PostgreSQL Windows 바이너리를 저장소의 `.runtime` 아래에 설치하고, 한국어 UI를
-내장한 `artex.exe`, 로컬 전용 PostgreSQL 및 `START-ARTEX-KO.cmd`를 구성합니다.
+이 포크는 **관리자 권한과 Docker 없이**, Windows 사용자 권한만으로 한국어판을
+빌드하고 실행하는 경로를 실제로 검증했습니다. Windows 11 x64, Node.js 24/npm 11
+환경에서 Go 1.27.1과 PostgreSQL 17.11의 공식 Windows ZIP을 사용했습니다.
+Node.js/npm과 Git만 미리 설치되어 있으면 됩니다.
+
+아래 스크립트는 우리가 검증한 절차를 그대로 자동화합니다. 공식 배포 파일의
+SHA-256을 확인한 뒤 저장소의 `.runtime`에 Go와 PostgreSQL을 설치하고, 한국어
+정적 UI를 내장한 `artex.exe`, 로컬 데이터베이스와 `START-ARTEX-KO.cmd`를 만듭니다.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -134,9 +138,41 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\install-windows.ps1 -NoStart
 ```
 
-PostgreSQL은 기본적으로 `127.0.0.1:5433`에만 바인딩되며 무작위 비밀번호를
-생성합니다. 이후에는 `START-ARTEX-KO.cmd`를 실행하고
-`http://127.0.0.1:8787/setup`에서 관리자 계정을 설정하십시오.
+포트를 바꿀 수도 있습니다.
+
+```powershell
+.\scripts\install-windows.ps1 -PostgresPort 55433 -WebPort 8877
+```
+
+PostgreSQL은 기본적으로 외부에 노출되지 않는 `127.0.0.1:5433`에만 바인딩되고,
+무작위 데이터베이스 비밀번호와 TCP용 SCRAM 인증을 구성합니다. 설치 후에는
+`START-ARTEX-KO.cmd`를 실행하고 `http://127.0.0.1:8787/setup`에서 관리자 계정과
+LLM 공급자를 설정하십시오. API 키는 설치 스크립트가 대신 만들거나 저장하지 않습니다.
+
+##### 실제 Windows 빌드 흐름
+
+자동화 스크립트가 내부에서 수행하는 핵심 단계는 다음과 같습니다. 문제를 진단하거나
+직접 재현해야 할 때 참고하십시오.
+
+1. `web`에서 `npm ci`로 devDependencies까지 설치합니다.
+2. PowerShell에서는 원본의 Unix식 `NEXT_EXPORT=1 ...` 구문 대신
+   `$env:NEXT_EXPORT='1'; npx next build`로 정적 UI를 빌드합니다.
+3. 최신 `@swc/core` Windows 네이티브 모듈을 불러오지 못하는 환경에서는 검증된
+   `@swc/core@1.15.18`과 `@swc/core-win32-x64-msvc@1.15.18`로 자동 재시도합니다.
+4. `web/out`을 `server/webui/dist`로 동기화하고 아래와 같은 단일 바이너리를 만듭니다.
+
+   ```powershell
+   $env:CGO_ENABLED='0'
+   go build -tags embedui -o artex.exe .\cmd\artex
+   ```
+
+5. 공식 PostgreSQL ZIP을 사용자 영역에 풀고 `127.0.0.1:5433`에서 시작한 뒤,
+   생성한 설정 파일의 접근 권한을 현재 사용자로 제한합니다.
+
+검증 당시 Next.js 정적 페이지 31개가 생성되었고, 한국어 UI가 포함된 `artex.exe`를
+빌드한 뒤 `/setup` 응답(HTTP 200)과 제목 `ARTEX: 자율 침투 테스트 콘솔`을
+확인했습니다. `npm audit` 결과를 없애기 위해 호환성을 깨뜨릴 수 있는
+`npm audit fix --force`는 자동 실행하지 않습니다.
 
 ---
 
