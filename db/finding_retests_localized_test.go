@@ -1,6 +1,8 @@
 package db
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"unicode"
 )
@@ -34,4 +36,23 @@ func assertRetestReasonKorean(t *testing.T, name, s string) {
 func TestFindingRetestReasonsLocalized(t *testing.T) {
 	assertRetestReasonKorean(t, "retestNoConclusionReason", retestNoConclusionReason)
 	assertRetestReasonKorean(t, "retestServiceRestartReason", retestServiceRestartReason)
+	assertRetestReasonKorean(t, "ErrRetestNotRunning", ErrRetestNotRunning.Error())
+}
+
+// TestFindingRetestConversationLocalized protects every string persisted into the
+// user-visible conversation when a retest is created. Internal agent prompts may
+// remain in their benchmarked source language, but titles and messages may not.
+func TestFindingRetestConversationLocalized(t *testing.T) {
+	for name, value := range map[string]string{
+		"untitled":               retestUntitledFinding,
+		"title":                  fmt.Sprintf(retestConversationTitle, 7, retestUntitledFinding),
+		"summary":                fmt.Sprintf(retestActivitySummary, 7),
+		"instruction":            (&FindingRetest{FindingID: 7}).InitialMessage(),
+		"instruction_with_notes": (&FindingRetest{FindingID: 7, Notes: "배포 버전 2"}).InitialMessage(),
+	} {
+		assertRetestReasonKorean(t, name, value)
+	}
+	if got := (&FindingRetest{FindingID: 7, Notes: "배포 버전 2"}).InitialMessage(); !strings.Contains(got, retestNotesHeading) || !strings.Contains(got, "배포 버전 2") {
+		t.Fatalf("재검증 추가 설명이 누락되었습니다: %q", got)
+	}
 }
