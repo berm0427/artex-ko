@@ -12,7 +12,9 @@
 param(
     [int]$PostgresPort = 5433,
     [int]$WebPort = 8787,
-    [switch]$NoStart
+    [switch]$NoStart,
+    [switch]$SkipLMStudio,
+    [string]$LMStudioModel = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -214,6 +216,52 @@ $launcher = ($launcher -replace "`r?`n", "`r`n")
     $launcher,
     [Text.UTF8Encoding]::new($false)
 )
+
+# ARTEX가 테이블 마이그레이션을 끝낸 뒤 LM Studio 프로필을 멱등 등록합니다.
+# LM Studio가 없는 환경에서는 설치 전체를 실패시키지 않고 UI 설정 경로를 유지합니다.
+if (-not $SkipLMStudio) {
+    $lmsCandidate = Join-Path $env:USERPROFILE '.lmstudio\bin\lms.exe'
+    $lmsCommand = Get-Command lms -ErrorAction SilentlyContinue
+    if ($lmsCommand -or (Test-Path -LiteralPath $lmsCandidate)) {
+        $temporaryArtex = $null
+        try {
+            try {
+                Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/setup" -UseBasicParsing -TimeoutSec 2 | Out-Null
+            } catch {
+                Write-Step '초기 데이터베이스 스키마 생성'
+                $temporaryArtex = Start-Process -FilePath (Join-Path $repoRoot 'artex.exe') `
+                    -ArgumentList @('-addr', ":$WebPort") -WorkingDirectory $repoRoot `
+                    -WindowStyle Hidden -PassThru
+                $ready = $false
+                for ($attempt = 0; $attempt -lt 60; $attempt++) {
+                    Start-Sleep -Milliseconds 500
+                    try {
+                        Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/setup" `
+                            -UseBasicParsing -TimeoutSec 2 | Out-Null
+                        $ready = $true
+                        break
+                    } catch { }
+                }
+                if (-not $ready) { throw 'ARTEX 초기 스키마 생성 대기 시간이 초과되었습니다.' }
+            }
+
+            $lmArgs = @()
+            if ($LMStudioModel) { $lmArgs += @('-Model', $LMStudioModel) }
+            & (Join-Path $PSScriptRoot 'configure-lmstudio.ps1') @lmArgs
+            if ($LASTEXITCODE -ne 0) { throw 'LM Studio 자동 연결 스크립트 실패' }
+        } catch {
+            Write-Warning "LM Studio 자동 연결을 건너뜁니다: $($_.Exception.Message)"
+            Write-Warning '.\scripts\configure-lmstudio.ps1 로 나중에 다시 설정할 수 있습니다.'
+        } finally {
+            if ($temporaryArtex -and -not $temporaryArtex.HasExited) {
+                Stop-Process -Id $temporaryArtex.Id -Force -ErrorAction SilentlyContinue
+                $temporaryArtex.WaitForExit()
+            }
+        }
+    } else {
+        Write-Warning 'LM Studio가 없어 자동 연결을 건너뜁니다. 설치 후 .\scripts\configure-lmstudio.ps1 을 실행하세요.'
+    }
+}
 
 Write-Host ''
 Write-Host '설치 완료' -ForegroundColor Green

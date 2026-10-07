@@ -147,7 +147,30 @@ Set-ExecutionPolicy -Scope Process Bypass
 PostgreSQL은 기본적으로 외부에 노출되지 않는 `127.0.0.1:5433`에만 바인딩되고,
 무작위 데이터베이스 비밀번호와 TCP용 SCRAM 인증을 구성합니다. 설치 후에는
 `START-ARTEX-KO.cmd`를 실행하고 `http://127.0.0.1:8787/setup`에서 관리자 계정과
-LLM 공급자를 설정하십시오. API 키는 설치 스크립트가 대신 만들거나 저장하지 않습니다.
+초기 비밀번호를 설정하십시오. LM Studio와 로컬 모델이 이미 설치되어 있으면 설치 스크립트가
+로컬 API 서버를 시작하고 모델을 로드한 뒤, `LM Studio Local` 프로필을 자동으로 등록·활성화합니다.
+클라우드 API 키는 설치 스크립트가 대신 만들거나 저장하지 않습니다.
+
+LM Studio 자동 연결을 원하지 않으면 `-SkipLMStudio`를 사용합니다. 설치된 모델이 여러
+개라면 `-LMStudioModel`로 사용할 모델 키를 지정할 수 있습니다.
+
+```powershell
+.\scripts\install-windows.ps1 -LMStudioModel dolphin3-cyber-8b
+.\scripts\install-windows.ps1 -SkipLMStudio
+```
+
+ARTEX 설치 후에만 로컬 LLM을 연결하거나 설정을 다시 맞추려면 다음 스크립트를 실행합니다.
+이 작업은 멱등하므로 반복 실행해도 같은 이름의 프로필이 중복 생성되지 않습니다.
+
+```powershell
+.\scripts\configure-lmstudio.ps1 -Model dolphin3-cyber-8b
+```
+
+기본값은 컨텍스트 16K, LM Studio 병렬 요청 2개, ARTEX worker 2개, 응답 상한
+4,096 token입니다. 모델을 지정하지 않으면 현재 로드된 LLM을 우선 사용하고, 없으면
+설치된 첫 번째 LLM을 선택합니다. 모델 파일 자체는 크고 하드웨어 요구량이 다르므로
+자동 다운로드하지 않습니다. LM Studio에 설치된 LLM이 하나도 없으면 안내와 함께
+자동 연결만 건너뜁니다.
 
 ##### 실제 Windows 빌드 흐름
 
