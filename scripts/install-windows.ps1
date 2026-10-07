@@ -193,10 +193,22 @@ set "PGBIN=$postgresBin"
 set "PGDATA=$postgresData"
 set "PGLOG=$postgresLog"
 "%PGBIN%\pg_isready.exe" -h 127.0.0.1 -p $PostgresPort -U artex >nul 2>&1
-if errorlevel 1 "%PGBIN%\pg_ctl.exe" -D "%PGDATA%" -l "%PGLOG%" -o "-p $PostgresPort -h 127.0.0.1" start
+if not errorlevel 1 goto postgres_ready
+echo [ARTEX-KO] PostgreSQL 시작 중...
+"%PGBIN%\pg_ctl.exe" -D "%PGDATA%" -l "%PGLOG%" -o "-p $PostgresPort -h 127.0.0.1" start
+if errorlevel 1 goto postgres_failed
+:postgres_ready
 echo [ARTEX-KO] http://127.0.0.1:$WebPort
+if defined ARTEX_KO_LAUNCHER_CHECK exit /b 0
 call "%~dp0start.bat" -addr :$WebPort
+exit /b %ERRORLEVEL%
+:postgres_failed
+echo [ARTEX-KO] PostgreSQL 시작 실패. 로그: %PGLOG% 1>&2
+exit /b 1
 "@
+# cmd.exe can misparse redirections such as 2>&1 when a generated batch file
+# uses LF-only newlines. Always emit a native CRLF launcher, even under pwsh 7.
+$launcher = ($launcher -replace "`r?`n", "`r`n")
 [IO.File]::WriteAllText(
     (Join-Path $repoRoot 'START-ARTEX-KO.cmd'),
     $launcher,
