@@ -116,6 +116,28 @@ docker compose up -d          # artex 이미지 + postgres 를 함께 기동
 
 > 실행은 `./artex` 를 직접 돌리지 말고 `start.sh`(Windows 는 `start.bat`)로 하십시오. 이 스크립트는 종료 코드에 따라 프로그램을 다시 띄우는 감시자이고, UI 의 "원클릭 업데이트"도 이 스크립트가 처리합니다.
 
+#### Windows 사용자 범위 설치
+
+관리자 권한이나 Docker 없이 한국어판을 소스에서 빌드하려면 PowerShell에서 다음을
+실행합니다. Node.js/npm은 미리 설치되어 있어야 합니다. 스크립트는 공식 Go ZIP과
+PostgreSQL Windows 바이너리를 저장소의 `.runtime` 아래에 설치하고, 한국어 UI를
+내장한 `artex.exe`, 로컬 전용 PostgreSQL 및 `START-ARTEX-KO.cmd`를 구성합니다.
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install-windows.ps1
+```
+
+설치만 하고 즉시 실행하지 않으려면 `-NoStart`를 사용합니다.
+
+```powershell
+.\scripts\install-windows.ps1 -NoStart
+```
+
+PostgreSQL은 기본적으로 `127.0.0.1:5433`에만 바인딩되며 무작위 비밀번호를
+생성합니다. 이후에는 `START-ARTEX-KO.cmd`를 실행하고
+`http://127.0.0.1:8787/setup`에서 관리자 계정을 설정하십시오.
+
 ---
 
 ## 설정
