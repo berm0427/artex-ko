@@ -61,7 +61,8 @@ if ([string]::IsNullOrWhiteSpace($Model)) {
 }
 
 $match = @($installed | Where-Object {
-    $_.modelKey -eq $Model -or $_.identifier -eq $Model -or $_.path -eq $Model
+    $identifier = if ($_.PSObject.Properties['identifier']) { [string]$_.identifier } else { '' }
+    $_.modelKey -eq $Model -or $identifier -eq $Model -or $_.path -eq $Model
 })
 if ($match.Count -eq 0) {
     $available = ($installed | ForEach-Object modelKey) -join ', '

@@ -27,7 +27,7 @@ func TestMergeAllRunsWritesTaskGoalOnce(t *testing.T) {
 	if got := strings.Count(out.message, longGoal); got != 1 {
 		t.Fatalf("same-task goal should appear exactly once in a merged-all run, got %d", got)
 	}
-	if strings.Count(out.message, "── 触发 ") < 1 || !strings.Contains(out.message, "触发 39") {
+	if strings.Count(out.message, "── 트리거 ") < 1 || !strings.Contains(out.message, "트리거 39") {
 		t.Fatalf("all 39 event bodies should be present: %q", out.message)
 	}
 	// A merged run embeds its header inline, so finalTriggerMessage must not re-add it.
@@ -52,10 +52,10 @@ func TestMergeAllRunsGroupsInterleavedTasks(t *testing.T) {
 	if got := strings.Count(out.message, "GOAL_B"); got != 1 {
 		t.Fatalf("task #2 goal should appear once despite interleaving, got %d", got)
 	}
-	if !strings.Contains(out.message, "共 2 个任务") {
+	if !strings.Contains(out.message, "작업 2개") {
 		t.Fatalf("header should report 2 tasks: %q", out.message)
 	}
-	if got := strings.Count(out.message, "── 触发 "); got != 4 {
+	if got := strings.Count(out.message, "── 트리거 "); got != 4 {
 		t.Fatalf("all 4 event bodies should be present, got %d", got)
 	}
 }
@@ -73,7 +73,7 @@ func TestFinalTriggerMessageSingleFirePrependsHeaderOnce(t *testing.T) {
 	if got := strings.Count(msg, longGoal); got != 1 {
 		t.Fatalf("single fire should carry the task goal exactly once, got %d", got)
 	}
-	if !strings.HasPrefix(msg, "【任务 #72") {
+	if !strings.HasPrefix(msg, "【작업 #72") {
 		t.Fatalf("single fire should be prefixed with the task-context header: %q", msg)
 	}
 }
@@ -104,13 +104,13 @@ func TestTaskContextHeaderTruncatesLongGoal(t *testing.T) {
 // 따라 번역하면 안 된다. 위 머지/헤더 동작 테스트가 `【任务 #`·`── 触发 `·`共 N 个任务` 를
 // 이미 핀하지만, 작업 컨텍스트 헤더의 목표 프레이밍과 by-task 머지 안내는 아직 미핀이라
 // 여기서 보강한다(우발 한국어화 역회귀 가드 · conversations.go 보존 주석과 짝).
-func TestTriggerSynthesisChineseFramingPreserved(t *testing.T) {
-	// 작업 컨텍스트 헤더의 목표 프레이밍(（目标：…）) 보존 — 입력에 CJK 를 안 넣어 프레이밍만 검증.
-	if h := taskContextHeader(7, "d", "g"); !strings.Contains(h, "（目标：") {
-		t.Fatalf("작업 컨텍스트 헤더의 목표 프레이밍이 바뀌었습니다(두뇌 입력 번역 금지): %q", h)
+func TestTriggerSynthesisKoreanHeaderPreserved(t *testing.T) {
+	// 사용자에게도 노출되는 작업 컨텍스트 헤더는 한국어 프레이밍을 유지한다.
+	if h := taskContextHeader(7, "d", "g"); !strings.Contains(h, "(목표:") {
+		t.Fatalf("작업 컨텍스트 헤더의 한국어 목표 프레이밍이 바뀌었습니다: %q", h)
 	}
 	// by-task 머지 안내 프레이밍 보존.
-	if out := mergeTriggeredRuns(sameTaskFires(3)); !strings.Contains(out.message, "【本会话合并了") {
-		t.Fatalf("by-task 머지 안내 프레이밍이 바뀌었습니다(두뇌 입력 번역 금지): %q", out.message)
+	if out := mergeTriggeredRuns(sameTaskFires(3)); !strings.Contains(out.message, "【이 대화는") {
+		t.Fatalf("by-task 머지 안내의 한국어 프레이밍이 바뀌었습니다: %q", out.message)
 	}
 }

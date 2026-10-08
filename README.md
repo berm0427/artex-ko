@@ -155,7 +155,7 @@ LM Studio 자동 연결을 원하지 않으면 `-SkipLMStudio`를 사용합니�
 개라면 `-LMStudioModel`로 사용할 모델 키를 지정할 수 있습니다.
 
 ```powershell
-.\scripts\install-windows.ps1 -LMStudioModel dolphin3-cyber-8b
+.\scripts\install-windows.ps1 -LMStudioModel qwen/qwen3-8b
 .\scripts\install-windows.ps1 -SkipLMStudio
 ```
 
@@ -163,7 +163,7 @@ ARTEX 설치 후에만 로컬 LLM을 연결하거나 설정을 다시 맞추려�
 이 작업은 멱등하므로 반복 실행해도 같은 이름의 프로필이 중복 생성되지 않습니다.
 
 ```powershell
-.\scripts\configure-lmstudio.ps1 -Model dolphin3-cyber-8b
+.\scripts\configure-lmstudio.ps1 -Model qwen/qwen3-8b -ProfileName 'LM Studio Qwen3 8B'
 ```
 
 기본값은 컨텍스트 16K, LM Studio 병렬 요청 2개, ARTEX worker 2개, 응답 상한
@@ -171,6 +171,11 @@ ARTEX 설치 후에만 로컬 LLM을 연결하거나 설정을 다시 맞추려�
 설치된 첫 번째 LLM을 선택합니다. 모델 파일 자체는 크고 하드웨어 요구량이 다르므로
 자동 다운로드하지 않습니다. LM Studio에 설치된 LLM이 하나도 없으면 안내와 함께
 자동 연결만 건너뜁니다.
+
+한국어 출력과 도구 호출을 함께 사용할 때는 LM Studio가 `trainedForToolUse: true`로
+인식하는 Qwen3 8B를 권장합니다. Q4_K_M 모델은 약 5GB이며 8GB급 VRAM에서도 16K
+컨텍스트로 사용할 수 있습니다. 일반 대화형 모델은 한국어 문장을 만들 수 있어도 ARTEX의
+함수 호출을 안정적으로 생성하지 못할 수 있습니다.
 
 ##### 실제 Windows 빌드 흐름
 
