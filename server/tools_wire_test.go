@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"runtime"
+	"strings"
 	"testing"
 
 	actool "github.com/Autumn-27/norma/tool"
@@ -61,8 +63,12 @@ func TestWireTools(t *testing.T) {
 	// non-catalog rows, so future user-defined custom tools survive too.
 	if bash, ok := worker["Bash"]; !ok {
 		t.Error("worker lost Bash (should pass through)")
+	} else if runtime.GOOS == "windows" {
+		if !strings.Contains(bash.Description(), "Windows PowerShell 5.1") || !strings.Contains(bash.Description(), "curl.exe") {
+			t.Error("Windows Bash description is missing its compatibility guidance")
+		}
 	} else if bash.Description() != actool.NewBash().Description() {
-		t.Error("Bash should pass through undecorated, but description changed")
+		t.Error("Bash should pass through undecorated on non-Windows, but description changed")
 	}
 	// planner is not bound to record_fact → resolving a base that contains it drops it.
 	planner := names(agent.ToolResolve(ctx, "planner", base))

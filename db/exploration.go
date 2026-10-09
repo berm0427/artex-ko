@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1975,6 +1976,57 @@ FROM activity WHERE exploration_id=$1 AND kind<>'thinking' AND id IN (`+strings.
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// SuccessfulToolQuote locates a verbatim excerpt in a successful tool result
+// from this intent. Model-written prose alone is never a provenance source.
+func (s *ExplorationStore) SuccessfulToolQuote(intentID int64, quote string) (int64, error) {
+	quote = strings.TrimSpace(quote)
+	if intentID <= 0 || len([]rune(quote)) < 16 {
+		return 0, nil
+	}
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM activity
+WHERE exploration_id=$1 AND node_id=$2 AND kind='tool_result'
+  AND is_error=false AND strpos(COALESCE(detail,''), $3)>0
+ORDER BY id DESC LIMIT 1`, s.expID, intentID, quote).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		// HTTP tools wrap the actual response body as an escaped JSON string in
+		// activity.detail. An agent may quote the unescaped body it saw. Accept
+		// that only when it is verbatim inside a successful tool result's body.
+		rows, queryErr := s.db.Query(`SELECT id, COALESCE(detail,'') FROM activity
+WHERE exploration_id=$1 AND node_id=$2 AND kind='tool_result' AND is_error=false
+ORDER BY id DESC LIMIT 100`, s.expID, intentID)
+		if queryErr != nil {
+			return 0, queryErr
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var detail string
+			if scanErr := rows.Scan(&id, &detail); scanErr != nil {
+				return 0, scanErr
+			}
+			var result struct {
+				Body string `json:"body"`
+			}
+			if json.Unmarshal([]byte(detail), &result) == nil {
+				if strings.Contains(result.Body, quote) {
+					return id, nil
+				}
+				// A model may reformat the complete JSON response with whitespace
+				// or key-order changes. Compare the parsed values, never a subset:
+				// changed or invented fields must still fail provenance checking.
+				var bodyValue, quoteValue any
+				if json.Unmarshal([]byte(result.Body), &bodyValue) == nil &&
+					json.Unmarshal([]byte(quote), &quoteValue) == nil &&
+					reflect.DeepEqual(bodyValue, quoteValue) {
+					return id, nil
+				}
+			}
+		}
+		return 0, rows.Err()
+	}
+	return id, err
 }
 
 // ActivityByIDsForTerminalIntents is the inherited-detail read boundary. It

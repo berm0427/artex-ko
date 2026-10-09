@@ -554,7 +554,7 @@ function ProfileSheet({
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="p-api-key">API Key</Label>
+            <Label htmlFor="p-api-key">API 키</Label>
             <Input
               id="p-api-key"
               type="password"

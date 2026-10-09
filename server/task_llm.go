@@ -188,6 +188,11 @@ func (r *taskLLMRuntime) maxTokens() int {
 	return cfg.MaxTokens
 }
 
+func (r *taskLLMRuntime) qwen3() bool {
+	cfg, ok := r.activeCfg()
+	return ok && strings.Contains(strings.ToLower(cfg.Model), "qwen3")
+}
+
 func parseTaskID(id string) (int64, error) {
 	n, err := strconv.ParseInt(id, 10, 64)
 	if err != nil || n <= 0 {
@@ -564,9 +569,12 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	wk := agent.NewWorker(workerRuntime, "task-router", s.m.dir, tx, window, s.agentMaxTurns("worker"))
 	wk.SetFindingRecorder(s.evidenceStore())
 	wk.SetCompactionWindowResolver(workerRuntime.CompactionWindow)
-	wk.SetNonStreaming(workerRuntime.nonStreaming) // 按任务当前激活 profile 的流式开关(每轮读)
-	wk.SetMaxTokens(workerRuntime.maxTokens)       // 同上,输出上限也跟随当前激活 profile
-	wk.SetNoaEnabled(s.m.NoaCompactionEnabled)     // 实验功能:noa 上下文压缩(平台级开关,每 run 读)
+	// LM Studio's Qwen3 stream may return only thinking deltas and no assistant
+	// content/tool call. Complete() preserves the tool call for this model family.
+	wk.SetNonStreaming(func() bool { return workerRuntime.qwen3() || workerRuntime.nonStreaming() })
+	wk.SetMaxTokens(workerRuntime.maxTokens) // 同上,输出上限也跟随当前激活 profile
+	wk.SetNoThink(workerRuntime.qwen3)
+	wk.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(平台级开关,每 run 读)
 	wk.SetRunTimeout(time.Duration(s.agentRunSeconds("worker")) * time.Second)
 	wk.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	wk.SetWebSearch(s.webSearchFor("worker"))

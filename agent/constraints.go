@@ -19,12 +19,22 @@ func constraintBlock(ts *db.ExplorationStore) string {
 	if err != nil || len(rows) == 0 {
 		return ""
 	}
+	return renderConstraintRows(rows)
+}
+
+func renderConstraintRows(rows []db.Constraint) string {
 	var allow, deny []string
+	seen := make(map[string]bool, len(rows))
 	for _, c := range rows {
 		text := strings.TrimSpace(c.Text)
 		if text == "" {
 			continue
 		}
+		key := c.Kind + "\x00" + strings.ToLower(text)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		if c.Kind == "allow" {
 			allow = append(allow, "- "+text)
 		} else {

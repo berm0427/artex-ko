@@ -744,7 +744,7 @@ function CustomToolDialog({
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
           <div className="grid gap-1.5">
-            <Label className="text-xs">Key</Label>
+            <Label className="text-xs">키</Label>
             <Input
               className="font-mono"
               placeholder={t("keyPlaceholder")}
@@ -801,7 +801,7 @@ function CustomToolDialog({
             <div className="grid gap-2">
               <div className="flex gap-2">
                 <div className="grid gap-1.5">
-                  <Label className="text-xs">Method</Label>
+                  <Label className="text-xs">메서드</Label>
                   <Input
                     className="w-24"
                     value={ex.method}

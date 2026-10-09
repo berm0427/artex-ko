@@ -200,7 +200,15 @@ const settingPythonInterp = "python_interpreter"
 func detectPython() string {
 	for _, c := range []string{"python3", "python"} {
 		if p, err := exec.LookPath(c); err == nil {
-			return p
+			// Windows may resolve python3 to the Microsoft Store app-execution
+			// alias. LookPath succeeds for that stub even though it cannot run code.
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			cmd := exec.CommandContext(ctx, p, "-c", "import sys; print(sys.version_info.major)")
+			out, runErr := cmd.Output()
+			cancel()
+			if runErr == nil && strings.TrimSpace(string(out)) == "3" {
+				return p
+			}
 		}
 	}
 	return ""

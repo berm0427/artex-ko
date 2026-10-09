@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -57,6 +58,9 @@ type ToolSet struct {
 	ts              *db.ExplorationStore
 	worker          string
 	taskID          int64 // PG tasks.id; 0 when unknown (tests / orchestrator cross-task reads)
+	// Only the round-0 goals decomposer is restricted to scope values literally
+	// present in the operator's task text. Later agents may add discovered assets.
+	declaredScopeText string
 	// coverageDisabled mirrors tasks.coverage_enabled=false. Stored inverted so the
 	// zero value (all existing ToolSet constructions) means ENABLED — matching the
 	// DB default (true). When true: graphOverviewData drops the coverage block, the
@@ -1033,6 +1037,22 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if strings.TrimSpace(it.Summary) == "" {
 		return 0, fmt.Errorf("summary 不能为空")
 	}
+	// A planner may submit the same direction again while a worker is already
+	// executing it. Do not spend a second worker slot on an identical active task.
+	if existing, err := t.ts.ListByKind(db.KindIntent, 1000); err == nil {
+		wanted := normalizedIntentSummary(it.Summary)
+		for _, node := range existing {
+			if node.State != "open" && node.State != "running" && node.State != "paused" {
+				continue
+			}
+			var payload struct {
+				Summary string `json:"summary"`
+			}
+			if json.Unmarshal(node.Payload, &payload) == nil && normalizedIntentSummary(payload.Summary) == wanted {
+				return 0, fmt.Errorf("동일한 탐색 의도가 이미 대기 또는 실행 중입니다: %d", node.ID)
+			}
+		}
+	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
 	parents := pidList(it.ParentIDs)
 	for _, pidv := range parents {
@@ -1086,6 +1106,10 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		}
 	}
 	return id, nil
+}
+
+func normalizedIntentSummary(text string) string {
+	return strings.ToLower(strings.Join(strings.Fields(text), " "))
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
@@ -1155,7 +1179,7 @@ func (t *ToolSet) listGoals() actool.CoreTool {
 }
 
 func (t *ToolSet) proveGoal() actool.CoreTool {
-	return t.writeExpTool("prove_goal", "当你判断某个发现/事实证明了某个目标达成时调用：把证据节点连到目标节点，并标记目标 met。",
+	return t.writeExpTool("prove_goal", "仅当探索图中已有的本任务事实/发现节点直接证明目标已达成时调用。不要用 HTTP 请求成功、工具运行成功、任务方向相符或主观判断充当漏洞/目标证据；遇到关联任务只读节点或无法核实的情况，不要标记达成。",
 		obj(map[string]any{
 			"goal_id":     idp("目标节点 id"),
 			"evidence_id": idp("证明它的发现/事实节点 id"),
@@ -1179,6 +1203,19 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 			evidenceNode, err := t.ts.GetNodeWithSources(ev)
 			if err != nil || evidenceNode == nil || (evidenceNode.Kind != db.KindFact && evidenceNode.Kind != db.KindFinding) {
 				return actool.Errorf("evidence_id 必须是本任务或直接关联任务的事实/漏洞节点"), nil
+			}
+			if evidenceNode.Inherited || evidenceNode.SourceTaskID != 0 {
+				return actool.Errorf("关联任务继承的事实/发现只读，不得用于标记本任务目标达成"), nil
+			}
+			var goalPayload struct {
+				VulnClass string `json:"vulnclass"`
+			}
+			_ = json.Unmarshal(goalNode.Payload, &goalPayload)
+			if strings.TrimSpace(goalPayload.VulnClass) != "" && evidenceNode.Kind != db.KindFinding {
+				return actool.Errorf("취약점 유형이 지정된 목표는 확인된 취약점(finding) 노드로만 달성 증명할 수 있습니다. 일반 사실이나 HTTP 응답만으로 완료 처리하지 마세요"), nil
+			}
+			if evidenceNode.Kind == db.KindFact && evidenceNode.State != "confirmed" {
+				return actool.Errorf("검증되지 않은 사실은 목표 달성 증거로 사용할 수 없습니다"), nil
 			}
 			_ = t.ts.Link(ev, db.RelProves, goal)
 			_ = t.ts.SetNodeState(goal, "met")
@@ -1208,6 +1245,17 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct{ Reason string }
 			_ = json.Unmarshal(in, &a)
+			if t.ts != nil {
+				goals, err := t.ts.ListByKind(db.KindGoal, 1000)
+				if err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				for _, g := range goals {
+					if g.State != "met" {
+						return actool.Errorf("아직 달성되지 않은 목표가 있습니다. goal_met으로 목표 증명을 우회할 수 없습니다"), nil
+					}
+				}
+			}
 			t.GoalMet = true
 			t.Reason = a.Reason
 			return actool.Text("acknowledged: goal marked met"), nil
@@ -1216,17 +1264,47 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 
 // --- worker write tools ---
 
+var embeddedEvidenceQuote = regexp.MustCompile(`(?i)['"]evidence_quote['"]\s*:\s*['"]([^'"]{16,})['"]`)
+
+// Some local tool-calling models encode an optional argument as text inside
+// another string field. Recover only the quote, then run the usual verbatim
+// successful-tool-output check below; this never makes invented evidence valid.
+func recoverFindingQuoteFromName(name string) (cleanName, quote string) {
+	loc := embeddedEvidenceQuote.FindStringSubmatchIndex(name)
+	if loc == nil {
+		return name, ""
+	}
+	cleanName = strings.Trim(strings.TrimSpace(name[:loc[0]]), " ,:'\"")
+	return cleanName, name[loc[2]:loc[3]]
+}
+
 func (t *ToolSet) addFinding() actool.CoreTool {
-	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供命令输出、日志等可验证证据。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
+	required := []string{"vulnclass", "severity", "summary"}
+	if t.ownerNode > 0 {
+		// Worker findings cannot pass provenance validation without these fields.
+		// Keep the planner's handoff path optional because it may use hint evidence.
+		required = append(required, "intent_id", "evidence_quote")
+	}
+	properties := map[string]any{
 		"vulnclass": str("漏洞类别"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
 		"intent_id": idp("当前任务的意图 id"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "受影响资产 id"},
 		"evidence":         str("证据/PoC 文本"),
+		"evidence_quote":   str("本意图中一次成功的工具输出에서 16자 이상 그대로 복사한 핵심 증거. 모델 설명이 아니라 실제 출력 원문이어야 합니다."),
 		"evidence_hint_id": idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
 		"traffic_refs": map[string]any{"type": "array", "description": "可选；HTTP/HTTPS 漏洞先检索并逐条核实请求/响应确实支持漏洞结论，再按复现顺序填写真实 ID。TCP 等非 HTTP 漏洞、未采集或找不到确切记录时省略或传 []，不阻止上报；可在 evidence 说明原因并提供其他可验证证据。不要猜测 ID、按域名/时间推定关联或仅为补包重复探测。用途 baseline 正常对照 / proof 漏洞证明 / verification 补充验证 / supporting 辅助证据。",
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
-	}, "vulnclass", "severity", "summary"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+	}
+	if t.ownerNode > 0 {
+		// A small local model is more reliable with the minimum evidence-bearing
+		// schema. The richer planner/handoff schema remains available there.
+		for _, key := range []string{"name", "asset_ids", "evidence", "evidence_hint_id", "traffic_refs"} {
+			delete(properties, key)
+		}
+	}
+	return writeTool("report_finding", "검증된 취약점만 기록합니다. Worker는 현재 intent_id와 성공한 도구 출력에서 복사한 evidence_quote를 반드시 별도 JSON 필드로 제출하세요. 단순한 HTTP 200만으로는 취약점이 아닙니다.", obj(properties, required...), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 		var a struct {
 			VulnClass, Name, Severity, Summary, Evidence string
+			EvidenceQuote                                string            `json:"evidence_quote"`
 			IntentID                                     json.RawMessage   `json:"intent_id"`
 			AssetIDs                                     []json.RawMessage `json:"asset_ids"`
 			TrafficRefs                                  []db.TrafficRef   `json:"traffic_refs"`
@@ -1235,8 +1313,30 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err := json.Unmarshal(in, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
+		if a.EvidenceQuote == "" && t.ownerNode > 0 {
+			a.Name, a.EvidenceQuote = recoverFindingQuoteFromName(a.Name)
+		}
 		if t.ts == nil {
 			return actool.Errorf("report_finding 需要任务上下文；平台对话请通过 add_task_hint 向对应任务交接漏洞，并在提示中携带已有的 traffic_refs，由任务 Agent 登记。已登记漏洞可用 bind_finding_traffic 补绑。"), nil
+		}
+		if t.ownerNode > 0 {
+			owner, err := t.ts.GetNode(t.ownerNode)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			if owner != nil && owner.Kind == db.KindIntent && pid(a.IntentID) != t.ownerNode {
+				return actool.Errorf("Worker는 현재 의도의 intent_id를 반드시 전달해야 합니다. 생략하거나 다른 ID로 증거 검사를 우회할 수 없습니다"), nil
+			}
+		}
+		if intentID := pid(a.IntentID); intentID > 0 {
+			stepID, err := t.ts.SuccessfulToolQuote(intentID, a.EvidenceQuote)
+			if err != nil {
+				return actool.Errorf("증거 출력 조회 실패: " + err.Error()), nil
+			}
+			if stepID == 0 {
+				return actool.Errorf("evidence_quote는 이 의도의 성공한 도구 출력에서 그대로 복사한 16자 이상이어야 합니다. 추측한 출력이나 실패한 명령으로 취약점을 등록할 수 없습니다"), nil
+			}
+			a.Evidence += fmt.Sprintf("\n[검증된 도구 출력 #%d] %s", stepID, strings.TrimSpace(a.EvidenceQuote))
 		}
 		// Auto-binding off: ignore the evidence params instead of rejecting the call.
 		// stripTrafficParameters already removes them from the advertised schema, but
@@ -1304,12 +1404,13 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 // must NOT be stuffed into the asset graph via upsert_asset.
 // factItem 是 record_fact 批量/单条的一条事实。
 type factItem struct {
-	Summary    string            `json:"summary"`
-	Detail     string            `json:"detail"`
-	Evidence   string            `json:"evidence"`   // 一行关键证据（命令+关键输出行），支撑结论、便于事后核对
-	Confidence string            `json:"confidence"` // observed（直接看到）| inferred（据现象推断）
-	IntentID   json.RawMessage   `json:"intent_id"`
-	AssetIDs   []json.RawMessage `json:"asset_ids"`
+	Summary       string            `json:"summary"`
+	Detail        string            `json:"detail"`
+	Evidence      string            `json:"evidence"`       // 一行关键证据（命令+关键输出行），支撑结论、便于事后核对
+	EvidenceQuote string            `json:"evidence_quote"` // exact excerpt from successful tool output
+	Confidence    string            `json:"confidence"`     // observed（直接看到）| inferred（据现象推断）
+	IntentID      json.RawMessage   `json:"intent_id"`
+	AssetIDs      []json.RawMessage `json:"asset_ids"`
 }
 
 // recordOneFact 写一条 fact 节点并连到意图（intent→yields→fact）。defaultIntent 为
@@ -1338,8 +1439,35 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 			return 0, fmt.Errorf("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
+	anchors := pidList(it.AssetIDs)
+	if len(anchors) > 0 {
+		if t.as == nil {
+			return 0, fmt.Errorf("asset_ids를 검증할 수 없습니다. 자산 ID를 생략하고 관찰 내용만 기록하세요")
+		}
+		assets, err := t.as.GetByIDsInScope(t.taskID, anchors)
+		if err != nil {
+			return 0, fmt.Errorf("asset_ids 검증 실패: %w", err)
+		}
+		if len(assets) != len(anchors) {
+			return 0, fmt.Errorf("asset_ids에 존재하지 않거나 이 작업 범위 밖인 ID가 있습니다. ID를 추측하거나 재시도하지 말고 asset_ids를 생략하거나 먼저 실제 자산을 조회하세요")
+		}
+	}
+	// Model prose without a concrete evidence excerpt remains a report, not a
+	// confirmed observation. This prevents unsupported claims from proving goals.
+	state := "reported"
+	if intent > 0 {
+		stepID, err := t.ts.SuccessfulToolQuote(intent, it.EvidenceQuote)
+		if err != nil {
+			return 0, fmt.Errorf("증거 출력 조회 실패: %w", err)
+		}
+		if stepID > 0 {
+			state = "confirmed"
+			payload["evidence_quote"] = strings.TrimSpace(it.EvidenceQuote)
+			payload["evidence_activity_id"] = stepID
+		}
+	}
 	// a fact is its OWN node kind (distinct from a vuln finding).
-	id, err := t.ts.AddNode(db.KindFact, payload, 5, "confirmed", t.worker, pidList(it.AssetIDs))
+	id, err := t.ts.AddNode(db.KindFact, payload, 5, state, t.worker, anchors)
 	if err != nil {
 		return 0, err
 	}
@@ -1359,13 +1487,14 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 		"  · confidence=observed（输出里直接看到）| inferred（据现象推断）。\n"+
 		"  · **否定类结论**（不可注入/端口关闭/未发现入口等）只写\"观察 + 试探性读法\"——陈述你实际看到什么，方向是否放弃由规划者综合全局定；务必给 evidence，手段没穷尽或证据弱（含只探一次、看起来像）标 inferred，确已穷尽且直接看到才标 observed。",
 		obj(map[string]any{
-			"facts":      map[string]any{"type": "array", "description": "【有多条不同结论时用】事实数组，元素字段同下方顶层字段（summary/detail/evidence/confidence/intent_id/asset_ids）；省略 intent_id 则用顶层 intent_id。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
-			"summary":    str("对本次探索结论的【总结性一句话】（是对 detail 的概括）"),
-			"intent_id":  idp("产生本事实的意图 id（你领到的意图；批量时作为各条默认）"),
-			"detail":     str("本事实的相关细节：把这次探索的多个观察事实都写进这里"),
-			"evidence":   str("【一行】关键证据：命令 + 最能证明结论的那一两行输出。务必简洁，不要粘大段输出（细节放 detail）。"),
-			"confidence": str("observed（输出里直接看到）| inferred（据现象推断）。否定结论务必如实标注。"),
-			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "相关资产 id（可选，0/1/多个）：该事实涉及哪些资产"},
+			"facts":          map[string]any{"type": "array", "description": "【有多条不同结论时用】事实数组，元素字段同下方顶层字段（summary/detail/evidence/confidence/intent_id/asset_ids）；省略 intent_id 则用顶层 intent_id。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
+			"summary":        str("对本次探索结论的【总结性一句话】（是对 detail 的概括）"),
+			"intent_id":      idp("产生本事实的意图 id（你领到的意图；批量时作为各条默认）"),
+			"detail":         str("本事实的相关细节：把这次探索的多个观察事实都写进这里"),
+			"evidence":       str("【一行】关键证据：命令 + 最能证明结论的那一两行输出。务必简洁，不要粘大段输出（细节放 detail）。"),
+			"evidence_quote": str("성공한 도구 출력에서 16자 이상 그대로 복사한 핵심 부분. 일치할 때만 사실을 confirmed로 표시하며, 없거나 일치하지 않으면 reported로 표시합니다."),
+			"confidence":     str("observed（输出里直接看到）| inferred（据现象推断）。否定结论务必如实标注。"),
+			"asset_ids":      map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "相关资产 id（可选，0/1/多个）：该事实涉及哪些资产"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
@@ -1394,6 +1523,9 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 			if !batch { // 单条：保持原返回
 				if e, bad := errs["0"]; bad {
 					return actool.Errorf(e), nil
+				}
+				if node, err := t.ts.GetNode(ids[0]); err == nil && node != nil && node.State == "reported" {
+					return actool.Text(fmt.Sprintf("fact recorded: %d (reported; 성공한 도구 출력과 일치하는 evidence_quote가 없어 미확인 상태)", ids[0])), nil
 				}
 				return actool.Text(fmt.Sprintf("fact recorded: %d", ids[0])), nil
 			}
@@ -1446,13 +1578,26 @@ type goalItem struct {
 // addOneGoal 挂一条 goal 节点(open)到探索图:连到任务根(origin fact,rel spawns)。
 // origin 取 t.worker(缺省 system):goals 拆解器写入的记 "goals"、主 agent 运行时记
 // "human"。唤醒 planner 由 setGoals 在整批写完后统一做(见下),这里只负责落库。
-func (t *ToolSet) addOneGoal(it goalItem) (int64, error) {
+func (t *ToolSet) addOneGoal(it goalItem) (int64, bool, error) {
 	text := strings.TrimSpace(it.Text)
 	if text == "" {
-		return 0, fmt.Errorf("text 不能为空")
+		return 0, false, fmt.Errorf("text 不能为空")
+	}
+	vc := strings.TrimSpace(it.VulnClass)
+	goals, err := t.ts.ListByKind(db.KindGoal, 1000)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, existing := range goals {
+		var old goalItem
+		if json.Unmarshal(existing.Payload, &old) == nil &&
+			strings.EqualFold(strings.Join(strings.Fields(old.Text), " "), strings.Join(strings.Fields(text), " ")) &&
+			strings.EqualFold(strings.TrimSpace(old.VulnClass), vc) {
+			return existing.ID, false, nil
+		}
 	}
 	payload := map[string]any{"text": text}
-	if vc := strings.TrimSpace(it.VulnClass); vc != "" {
+	if vc != "" {
 		payload["vulnclass"] = vc
 	}
 	origin := t.worker
@@ -1461,12 +1606,12 @@ func (t *ToolSet) addOneGoal(it goalItem) (int64, error) {
 	}
 	id, err := t.ts.AddNode(db.KindGoal, payload, 0, "open", origin, nil)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if of, _ := t.ts.OriginFactID(); of > 0 && id > 0 {
 		_ = t.ts.Link(of, db.RelSpawns, id) // goals descend from the task root (origin fact)
 	}
-	return id, nil
+	return id, true, nil
 }
 
 // setGoals 给【本任务】新增探索目标(goal 节点)。既是目标拆解器的提交工具,也是主
@@ -1497,16 +1642,20 @@ func (t *ToolSet) setGoals() actool.CoreTool {
 			}
 
 			ids := make([]int64, len(items))
+			reused := make([]bool, len(items))
 			errs := map[string]string{}
 			var addedTexts []string
 			for i, it := range items {
-				id, err := t.addOneGoal(it)
+				id, added, err := t.addOneGoal(it)
 				if err != nil {
 					errs[strconv.Itoa(i)] = err.Error()
 					continue
 				}
 				ids[i] = id
-				addedTexts = append(addedTexts, strings.TrimSpace(it.Text))
+				reused[i] = !added
+				if added {
+					addedTexts = append(addedTexts, strings.TrimSpace(it.Text))
+				}
 			}
 			if len(addedTexts) > 0 {
 				// 唤醒 planner(整批一次)。优先 notifyGoal:一次 set_goals 记一条「人新增了
@@ -1529,9 +1678,12 @@ func (t *ToolSet) setGoals() actool.CoreTool {
 				if e, bad := errs["0"]; bad {
 					return actool.Errorf(e), nil
 				}
+				if reused[0] {
+					return actool.Text(fmt.Sprintf("goal already exists: %d", ids[0])), nil
+				}
 				return actool.Text(fmt.Sprintf("goal added: %d", ids[0])), nil
 			}
-			out := map[string]any{"ids": ids}
+			out := map[string]any{"ids": ids, "reused": reused}
 			if len(errs) > 0 {
 				out["errors"] = errs
 			}

@@ -151,7 +151,7 @@ function CreateAgentDialog({ onCreated }: { onCreated: (key: string) => void }) 
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
-            <Label htmlFor="agent-key">Key</Label>
+            <Label htmlFor="agent-key">키</Label>
             <Input
               id="agent-key"
               placeholder={t("keyPlaceholder")}

@@ -320,8 +320,8 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         <TabsTrigger value="prompt">{tr("tab.prompt")}</TabsTrigger>
         <TabsTrigger value="wrapup">{tr("tab.wrapup")}</TabsTrigger>
         <TabsTrigger value="mcp">MCP</TabsTrigger>
-        <TabsTrigger value="skill">Skill</TabsTrigger>
-        <TabsTrigger value="tools">Tools</TabsTrigger>
+        <TabsTrigger value="skill">스킬</TabsTrigger>
+        <TabsTrigger value="tools">도구</TabsTrigger>
         {isCustom && <TabsTrigger value="triggers">{tr("tab.triggers")}</TabsTrigger>}
       </TabsList>
 

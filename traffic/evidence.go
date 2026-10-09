@@ -37,7 +37,7 @@ func (t *Traffic) ReadEvidence(ctx context.Context, ids []string, consume func(E
 			return err
 		}
 		if err := t.readEvidence(id, consume); err != nil {
-			return fmt.Errorf("流量 %s: %w", id, err)
+			return fmt.Errorf("트래픽 ID %s: %w", id, err)
 		}
 	}
 	return nil
@@ -48,6 +48,9 @@ func (t *Traffic) readEvidence(id string, consume func(EvidenceExchange) error) 
 	var legacy string
 	if err := t.db.QueryRow(`SELECT ts,url,method,status,content_type,req_len,resp_len,path FROM exchanges WHERE id=?`, id).
 		Scan(&e.TS, &e.URL, &e.Method, &e.Status, &e.ContentType, &e.ReqLen, &e.RespLen, &legacy); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("저장된 트래픽 ID %q를 찾을 수 없습니다", id)
+		}
 		return err
 	}
 	var req, resp []byte
@@ -77,6 +80,9 @@ func (t *Traffic) readEvidence(id string, consume func(EvidenceExchange) error) 
 			return err
 		}
 		return consume(e)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("트래픽 ID %q의 요청/응답 증거를 찾을 수 없습니다", id)
 	}
 	if err != nil {
 		return err

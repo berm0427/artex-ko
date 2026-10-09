@@ -1,7 +1,9 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -38,19 +40,46 @@ ORDER BY (kind='deny'), id`, s.expID)
 	return out, rows.Err()
 }
 
-// AddConstraint inserts one constraint (kind must be allow|deny) and returns its id.
+// AddConstraint reuses an equivalent operation constraint in this exploration.
+// The goals agent may repeat the same tool call across turns; duplicates would
+// bloat every subsequent planner/worker prompt. The transaction lock also makes
+// concurrent calls for the same task idempotent without deleting old records.
 func (s *ExplorationStore) AddConstraint(kind, text, origin string) (int64, error) {
 	if kind != "allow" && kind != "deny" {
 		return 0, fmt.Errorf("kind 必须是 allow 或 deny")
 	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0, fmt.Errorf("text 不能为空")
+	}
 	if origin == "" {
 		origin = "system"
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`SELECT pg_advisory_xact_lock($1)`, s.expID); err != nil {
+		return 0, err
+	}
 	var id int64
-	err := s.db.QueryRow(`
+	err = tx.QueryRow(`SELECT id FROM task_constraints
+WHERE exploration_id=$1 AND kind=$2 AND lower(btrim(text))=lower($3)
+ORDER BY id LIMIT 1`, s.expID, kind, text).Scan(&id)
+	if err == nil {
+		return id, tx.Commit()
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+	err = tx.QueryRow(`
 INSERT INTO task_constraints(exploration_id, kind, text, origin)
 VALUES ($1, $2, $3, $4) RETURNING id`, s.expID, kind, text, origin).Scan(&id)
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }
 
 // UpdateConstraint rewrites a constraint's kind + text; scoped to this exploration.

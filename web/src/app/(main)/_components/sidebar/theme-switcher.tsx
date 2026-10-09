@@ -11,6 +11,11 @@ const THEME_CYCLE = ["light", "dark", "system"] as const;
 export function ThemeSwitcher() {
   const themeMode = usePreferencesStore((s) => s.themeMode);
   const setThemeMode = usePreferencesStore((s) => s.setThemeMode);
+  const themeModeLabel = {
+    light: "밝게",
+    dark: "어둡게",
+    system: "시스템 설정 따름",
+  }[themeMode];
 
   const cycleTheme = () => {
     const currentIndex = THEME_CYCLE.indexOf(themeMode);
@@ -21,7 +26,7 @@ export function ThemeSwitcher() {
   };
 
   return (
-    <Button size="icon" onClick={cycleTheme} aria-label={`Current theme: ${themeMode}. Click to cycle themes`}>
+    <Button size="icon" onClick={cycleTheme} aria-label={`현재 테마: ${themeModeLabel}. 눌러서 테마를 전환하세요`}>
       {/* SYSTEM */}
       <Monitor className="hidden [html[data-theme-mode=system]_&]:block" />
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/Autumn-27/artex/agent"
@@ -252,7 +253,15 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 			if len(row.Schema) > 0 {
 				_ = json.Unmarshal(row.Schema, &schema)
 			}
-			return meterTool(agent.DecorateTool(t, row.Description, schema), pg, row.Key, agentKey, runInfo)
+			description := row.Description
+			if agentKey == "worker" && row.Key == "report_finding" {
+				// The shared tools table predates mandatory worker provenance and is
+				// first-insert-only. Do not let its stale optional-field schema hide
+				// intent_id/evidence_quote from a worker's model.
+				schema = t.InputSchema()
+				description += "\nWorker 필수: intent_id와 성공한 도구 출력에서 그대로 복사한 evidence_quote를 각각 별도 JSON 필드로 전달하세요."
+			}
+			return meterTool(agent.DecorateTool(t, description, schema), pg, row.Key, agentKey, runInfo)
 		}
 		out := tools[:0:0]
 		for _, t := range tools {
@@ -317,6 +326,20 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 						out[i] = agent.DecorateTool(t, t.Description()+bashInteractiveShellNote, t.InputSchema())
 						break
 					}
+				}
+			}
+		}
+		// Norma's cross-platform tool keeps the historical name "Bash", but on
+		// Windows it executes Windows PowerShell 5.1. Put the compatibility rule in
+		// the tool description itself (closest to each tool call), not only in the
+		// long system prompt, so small local models do not repeatedly emit bash-only
+		// syntax or PowerShell's curl alias.
+		if runtime.GOOS == "windows" {
+			const windowsNote = "\n\n[Windows 실행 환경 - 필수] 이 Bash 도구는 Windows PowerShell 5.1을 실행합니다. `&&`/`||`를 사용하지 말고 세미콜론(`;`) 또는 PowerShell 제어문을 사용하세요. HTTP 요청은 `curl`이 아니라 반드시 `curl.exe` 또는 `Invoke-WebRequest`로 실행하세요. 실패한 명령을 그대로 반복하지 마세요."
+			for i, t := range out {
+				if t.Name() == "Bash" {
+					out[i] = agent.DecorateTool(t, t.Description()+windowsNote, t.InputSchema())
+					break
 				}
 			}
 		}

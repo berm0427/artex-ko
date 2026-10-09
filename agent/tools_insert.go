@@ -466,6 +466,10 @@ func (t *ToolSet) addTaskScope() actool.CoreTool {
 			var added []map[string]any
 			errs := map[string]string{}
 			for i, e := range items {
+				if t.worker == "goals" && !scopeDeclaredInTaskText(e.Value, t.declaredScopeText) {
+					errs[strconv.Itoa(i)] = "목표/설명에 없는 범위는 등록할 수 없습니다"
+					continue
+				}
 				ts, err := t.as.AddAgentScope(t.taskID, strings.TrimSpace(e.Kind), e.Value, a.Reason, "agent")
 				if err != nil {
 					errs[strconv.Itoa(i)] = err.Error()
@@ -480,6 +484,32 @@ func (t *ToolSet) addTaskScope() actool.CoreTool {
 			return jsonResult(out)
 		},
 	)
+}
+
+func scopeDeclaredInTaskText(value, taskText string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	text, needle := strings.ToLower(taskText), strings.ToLower(value)
+	for from := 0; from < len(text); {
+		rel := strings.Index(text[from:], needle)
+		if rel < 0 {
+			return false
+		}
+		start, end := from+rel, from+rel+len(needle)
+		beforeOK := start == 0 || !scopeTokenChar(text[start-1])
+		afterOK := end == len(text) || !scopeTokenChar(text[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		from = start + 1
+	}
+	return false
+}
+
+func scopeTokenChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_'
 }
 
 // listUntestedAssets lets the plan agent pull the current + directly inherited

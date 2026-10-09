@@ -812,7 +812,7 @@ function ChatView({
             </span>
           )}
           {tokenTotal.any && (
-            <span title="input / cache(read) / output tokens" className="min-w-0 truncate tabular-nums">
+            <span title="입력 / 캐시(읽기) / 출력 토큰" className="min-w-0 truncate tabular-nums">
               input {fmtTokens(tokenTotal.i)} · cache {fmtTokens(tokenTotal.cr)} · output {fmtTokens(tokenTotal.o)}
             </span>
           )}

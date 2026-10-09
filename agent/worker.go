@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +86,7 @@ type Worker struct {
 	// maxTokensFn resolves the per-reply output cap in tokens, on the same
 	// per-run basis. nil or 0 = send no cap and let the endpoint decide.
 	maxTokensFn func() int
+	noThinkFn   func() bool
 }
 
 // WorkerSessionID returns the stable transcript key used by a worker intent.
@@ -127,6 +129,9 @@ func (w *Worker) SetNoaEnabled(fn func() bool) { w.noaEnabledFn = fn }
 // send no cap and let the endpoint decide. Read per run, like nonStreaming.
 func (w *Worker) SetMaxTokens(fn func() int) { w.maxTokensFn = fn }
 
+// SetNoThink resolves a model-family-specific Qwen3 prompt switch per run.
+func (w *Worker) SetNoThink(fn func() bool) { w.noThinkFn = fn }
+
 func (w *Worker) maxTokens() int {
 	if w.maxTokensFn == nil {
 		return 0
@@ -151,7 +156,7 @@ func (w *Worker) SetRunTimeout(run time.Duration) {
 // settleWrapUpPrompt is injected by the SDK settlement phase when a worker hits its
 // turn/time budget: stop probing, write back what was found, then end with a
 // plain-text one-liner (which becomes this run's displayed result).
-const settleWrapUpPrompt = "이번 실행이 예산 소진으로 곧 종료됩니다. 더 이상 어떤 명령이나 탐지도 실행하지 마십시오. 다음 순서대로 처리하십시오. (1) 위에서 이미 식별했지만 아직 기록하지 않은 내용을 하나씩 기록합니다. 새 자산은 insert_assets, 탐색 결론과 사실은 record_fact, 확인된 취약점은 report_finding 으로 기록합니다. (2) **맨 마지막에 한 문장짜리 순수 텍스트로만** 무엇을 했고 어떤 핵심 결론을 얻었는지 한국어로 요약합니다. 이 한 문장이 이번 실행의 결과로 사용자에게 표시되므로 반드시 출력해야 합니다."
+const settleWrapUpPrompt = "이번 실행이 예산 소진으로 곧 종료됩니다. 더 이상 명령이나 탐지를 실행하지 마십시오. 성공한 도구 응답으로 직접 확인한 내용 중 아직 저장하지 않은 것만 insert_assets, record_fact, report_finding으로 기록하세요. 실패·취소된 명령의 출력은 증거로 만들거나 추측하지 마십시오. 저장 도구가 실패하면 같은 내용을 재시도하지 말고 실패 사실을 최종 요약에 남기세요. 저장할 검증된 내용이 없으면 저장 도구를 호출하지 마십시오. 마지막에 한 문장의 한국어 순수 텍스트로 실제 확인된 결과와 미완료 사유를 요약하세요."
 
 func NewWorker(prov llm.Provider, model, workDir string, tx *transcript.Store, window, maxTurns int, extra ...actool.CoreTool) *Worker {
 	return &Worker{prov: prov, model: model, workDir: workDir, tx: tx, window: window, maxTurns: maxTurns, extraTools: extra}
@@ -227,20 +232,7 @@ func proxyEnv(proxyAddr, caCert string) []string {
 // prompt, seeded into agent_prompts. The trafficTool block and the 中间产物输出规约
 // are NOT here — they are code-owned and appended by workerSystem after rendering
 // (段 [B]/[C]), so editing the DB body can never drop them.
-const workerDefaultTmpl = `你是一个网络安全平台授权渗透测试系统的"执行者"(work agent)。你领到【一条意图】(一句话探索方向)，唯一职责：**完成这一条意图、把发现写回知识图谱、然后停止返回。**
-
-**边界（红线）**：
-1. **只做你领到的这一条意图**。**探本意图时若瞥见本意图之外值得深挖的线索**（报错泄露的路径、可能与其它资产联动的点、疑似另一条利用链的入口），**在 fact 的 summary 里点一句交给规划者**。
-2. 初次受阻（payload 被过滤 / 404 / 注入无回显）不代表已探透——把本意图的所有绕过手段走完再输出结论；
-3. 只在授权范围内操作。系统提示顶部若附【操作约束】，那是最高优先级红线：每条命令/探测执行前先自检，违反即不做（哪怕它落在你领到的意图里）。
-
-**边发现边写回**（写进图才算数，脑子/文字里的不算；每得一个结果立刻写，别攒到最后被步数耗尽丢掉）。三种写回，别串图：
-- **新资产/资源 → insert_assets（资产图）**：子域 / service / endpoint / 指纹 / 凭据 等一切资产【本身】。**这里只登记资产；探索结论/判断不写这里，用 record_fact。**
-- **探索结论/事实 → record_fact（探索图，传 intent_id）**：都用它。**多个观察汇总成【一条】事实**（summary 一句总结 + detail写对总结的拓展，依靠真实的执行过程），不要一个属性一条、一意图通常只一条，拆碎会让图谱无限膨胀——**默认就写一条，能并进 detail 的都并进去**；仅当确有【彼此完全独立、无法归并】的结论时才用 facts 数组分条，这是极少数例外，不是常规。**只写增量**：只记这次【新得到】的，别把已有事实换措辞重记（只印证已有、无新增就不必记）。**只写真实看到的**：给 evidence（一行：命令+最能证明的一两行输出，简洁，细节在 detail）、标 confidence（observed=直接看到 / inferred=据现象推断）。
-- **确认漏洞 → report_finding（探索图，含 PoC，传 intent_id）**：**只有你本次真实触发过、拿到可复现证据（请求/响应或命令输出）才用**。严禁把"版本/指纹匹配到 CVE""参数看起来可注入""外部漏洞库/更新日志/代码 diff 推断"当已确认，也不要用查 CVE 库或对比补丁版本替代实际触发。触发不了但有嫌疑 → 用 record_fact 记一条 inferred 事实（嫌疑点+为何未触发）交规划者，别硬记成 finding。
-
-
-完成本意图后用一句话总结你做了什么、写回了哪些事实。`
+const workerDefaultTmpl = `당신은 허가된 보안 검증 작업자입니다. 지정된 의도와 허가된 범위만 수행하세요. 필요한 도구를 호출해 실제 응답을 확인한 뒤 결론을 쓰세요. 각 객체가 소유자에게만 공개되는 정책에서 사용자 A의 인증 요청으로 사용자 B 소유 비공개 객체가 HTTP 200으로 반환되고 내용이 드러나면 IDOR 취약점입니다. 이 경우 record_fact가 아니라 report_finding을 호출하고, 현재 intent_id와 성공한 도구 출력에 그대로 존재하는 16자 이상의 evidence_quote를 별도 JSON 필드로 전달하세요. 접근이 거부되거나 정책이 불분명하면 취약점으로 보고하지 마세요. 동일한 결과를 반복 기록하지 말고 한 번 기록한 뒤 종료하세요.`
 
 // workerTrafficBlock is 段 [B]: the traffic-tool note, code-injected only when
 // traffic capture (recording) is on — i.e. the traffic_* tools actually exist.
@@ -323,18 +315,27 @@ func renderIntentTask(intent *db.Node) string {
 // purpose is letting the worker read context (existing facts/assets/hints)
 // so it avoids redundant work and doesn't re-derive what others already found.
 func renderWorkerGraphOverview(data map[string]any) string {
-	// coverage 是给规划者判断「哪类测得少 / 要不要扩范围」的信号，与 worker「只做领到的
-	// 那条意图、别追未覆盖的点」的职责边界相悖 → 从 worker 视图里剔除。data 是本次 worker
-	// 专属的新 map，删键不影响 planner。
-	delete(data, "coverage")
-	b, err := json.Marshal(data)
+	// A worker already receives its full assigned intent. Repeating the task,
+	// goals, running intents and coverage here made local-model prompts larger
+	// than their context window. Keep only a small window of findings and hints;
+	// the full graph remains available through graph_overview/node_detail tools.
+	compact := map[string]any{}
+	for _, key := range []string{"recent_facts", "finding_list", "hints"} {
+		if entries, ok := data[key].([]map[string]any); ok && len(entries) > 0 {
+			if len(entries) > 5 {
+				entries = entries[:5]
+			}
+			compact[key] = entries
+		}
+	}
+	if len(compact) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(compact)
 	if err != nil {
 		return "" // fall back silently: the worker just won't have the global context
 	}
-	return "\n\n【全局探索态势（只读，帮你把自己这条意图放进大局看）】：\n" +
-		"下面是整个任务当前的探索概况。用途有两个：一是知道别人已发现什么，别重复；二是让你探自己这条意图时，能联想到它和全局的关系。\n" +
-		"**发散是好事**：探本意图时尽管深想、多联想。唯一的界线是——别真的动手去执行别的意图（那是别的 worker 的事，由规划者调度）。但凡你联想到有价值的线索（跨资产的联动、疑似另一条利用链的入口、全局层面的可疑点），**务必写进 fact 交规划者**——这是你重要的产出，不是可有可无。宁可多报一条让规划者判断，也别自己咽下去。\n" +
-		string(b)
+	return "\n\n참고용 기존 사실·취약점·힌트(상위 5건씩, 현재 의도의 범위를 넓히지 않음):\n" + string(b)
 }
 
 // Execute runs one intent. hooks (the per-task Guard) gates every tool call; may
@@ -482,12 +483,22 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 			emit(r)
 		}
 	}
-	// 意图 / 启动指令 / 意图锚定资产已随 system prompt 下发（见上方 sysBody 组装）。
-	// 这条启动 user 消息只承载【全局态势 overview】——可降级的了解大局信息，压掉无碍。
-	// overview 罕见地 marshal 失败为空时，回退一句启动词，避免首轮出现空 user 消息。
-	input := overview
-	if strings.TrimSpace(input) == "" {
-		input = "开始执行 system 里领到的意图：只做它、只产生事实、assets、finding、做完即停。"
+	// Keep the authoritative intent in the system prompt, but repeat the immediate
+	// action in the user turn. Small local models can otherwise treat a graph-only
+	// first user message as a request to summarize the graph and return no tools.
+	input := "지금 실행할 의도:\n" + renderIntentTask(intent) +
+		"\n먼저 필요한 검증 도구를 호출하세요. 실제 출력이 없으면 사실이나 취약점을 기록하지 마세요."
+	if runtime.GOOS == "windows" {
+		input += "\nWindows PowerShell에서는 curl이 Invoke-WebRequest 별칭일 수 있으므로 curl.exe를 명시하거나 Invoke-WebRequest의 정식 구문을 사용하세요."
+	}
+	// Qwen3's thinking-only replies can consume the output budget without a
+	// visible message or tool call. Its documented /no_think switch is scoped
+	// to that model family; other providers receive an ordinary user turn.
+	if (w.noThinkFn != nil && w.noThinkFn()) || (w.noThinkFn == nil && strings.Contains(strings.ToLower(w.model), "qwen3")) {
+		input = "/no_think\n" + input
+	}
+	if strings.TrimSpace(overview) != "" {
+		input += "\n\n참고용 전체 진행 상황:\n" + overview
 	}
 
 	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。

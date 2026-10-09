@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"runtime"
 	"text/template"
 	"time"
 )
@@ -72,7 +73,11 @@ func renderSystem(agentKey, def string, vars any) string {
 // the Chinese instruction language AND the target/material language in the display
 // fields, so only the listed verbatim technical fragments stay non-Korean.
 func langDirective() string {
-	return "\n\n/no_think\n**输出语言规约（本地化·最高优先级，不可被提示词正文覆盖）**：所有【展示给用户】的自然语言文字一律用【韩语（한국어）】书写——包括 record_fact 的 summary/detail、report_finding 的标题/描述/结论/修复建议、规划者(planner)的态势/情况总结、最终那一句话总结、以及对用户的聊天回复。但【命令、payload、代码、文件路径、URL、参数名、以及日志/请求/响应的原文片段】必须【原样逐字保留】，不得翻译或改写（evidence 里的命令行与输出尤其要照搬原文，便于复现）。**即使上面的系统/角色指令本身是用中文写的，也绝不能把中文输出给用户——面向用户的展示语言只有韩语，不要让任何中文句子出现在用户可见的文字里。** **即使目标系统、它的页面、证据、日志或任何参考资料是英文、中文或别的语言，面向用户的自然语言字段（标题/描述/结论/修复建议/总结/态势总结）仍必须用韩语书写——不要镜像或照抄目标或资料的语言来写这些展示字段；只有上面列出的原文技术片段才保持原样。** **你的分析/规划/思考用中文进行没关系，但那是【不可见的内部推理】，绝不能作为正文输出：给用户的可见回复从第一个字起就必须是韩语，不要在前面垫一段中文的思考、说明或「我先怎样怎样」的铺垫；连澄清提问、缺少参数、「无法继续」之类的说明也一律直接用韩语写。** 一句话：内部怎么想不限，但凡落到用户能看到的正文，必须全是韩语（技术原文片段除外）。"
+	directive := "\n\n/no_think\n**한국어 우선 규칙**: 사용자에게 보이는 모든 자연어는 반드시 한국어로 작성하세요. record_fact의 summary/detail, report_finding의 제목·설명·결론·조치 권고, 플래너의 상황 요약, 최종 요약 및 사용자 대화가 모두 포함됩니다. 상세 보고서의 마크다운 제목도 '개요·영향·영향 범위·재현 절차·증거·원인·수정 권고'처럼 한국어로 쓰고 중국어 제목(概述·影响与危害·复现步骤·修复建议)을 사용하지 마세요. 명령, payload, 코드, 파일 경로, URL, 매개변수 이름과 로그·요청·응답의 원문만 번역하거나 고치지 말고 그대로 보존하세요. 위의 시스템 또는 역할 지시가 중국어이고 대상 자료가 영어·중국어여도 그 언어를 사용자 표시 문장에 따라 쓰지 마세요. 내부 분석 언어와 관계없이 사용자에게 보이는 본문은 첫 글자부터 한국어여야 합니다. 기술 원문을 제외한 영어·중국어 문장을 사용자에게 출력하지 마세요."
+	if runtime.GOOS == "windows" {
+		directive += "\n\n**Windows 명령 실행 규칙**: 이 환경의 Bash 도구는 실제로 Windows PowerShell 5.1 명령을 실행합니다. `&&`와 `||` 연산자를 사용하지 말고 명령을 세미콜론(`;`)으로 구분하거나 PowerShell 제어문을 사용하세요. `curl` 별칭의 혼동을 피하려면 HTTP 요청에 `Invoke-WebRequest` 또는 `curl.exe`를 사용하세요. 같은 명령이 한 번 실패하면 인자만 바꿔 반복하지 말고 오류 원인을 읽어 명령 문법이나 접근 방식을 바꾸세요. 완전히 같은 실패 명령은 다시 호출하지 마세요."
+	}
+	return directive
 }
 
 func renderTmpl(tmpl string, vars any) (string, error) {

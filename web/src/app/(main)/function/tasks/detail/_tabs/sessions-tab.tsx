@@ -507,7 +507,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         id,
         role: "worker",
         intent_id: id,
-        title: `Worker #${id}`,
+        title: `워커 #${id}`,
         status: "done",
         live: false,
         last_activity: source.items[0]?.ts ?? "",
@@ -1755,7 +1755,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         {/* Right: transcript */}
         <SideQuestionWorkspace
           side={side}
-          label={active.role === "worker" ? `Worker #${active.intent_id} · ${activeDisplayTitle}` : activeDisplayTitle}
+          label={active.role === "worker" ? `워커 #${active.intent_id} · ${activeDisplayTitle}` : activeDisplayTitle}
         >
           <div className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden rounded-lg border bg-card">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-2 sm:px-4 sm:py-2.5">

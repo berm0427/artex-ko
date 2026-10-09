@@ -1602,7 +1602,10 @@ func skillRelPath(file string) (string, string) {
 	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
 		return "", "invalid path"
 	}
-	return clean, ""
+	// Return the API's canonical, platform-independent slash form while keeping
+	// filepath.Clean above for native path validation. filepath.Join accepts
+	// slash-separated components on Windows as well.
+	return filepath.ToSlash(clean), ""
 }
 
 // walkSkillFiles returns all files under root (relative to root), sorted,

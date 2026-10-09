@@ -1265,7 +1265,7 @@ export default function SkillsPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
-                  <Label className="text-muted-foreground text-xs">license</Label>
+                  <Label className="text-muted-foreground text-xs">라이선스</Label>
                   <Input
                     placeholder="MIT / Proprietary"
                     value={newLicense}
@@ -1273,7 +1273,7 @@ export default function SkillsPage() {
                   />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label className="text-muted-foreground text-xs">compatibility</Label>
+                  <Label className="text-muted-foreground text-xs">호환성</Label>
                   <Input
                     placeholder={t("compatPlaceholder")}
                     value={newCompat}

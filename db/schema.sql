@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS exploration_nodes (
         (kind='begin'   AND state IN ('open')) OR
         (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped','deleted')) OR
         (kind='goal'    AND state IN ('open','met','abandoned')) OR
-        (kind='fact'    AND state IN ('confirmed','dismissed','origin')) OR
+        (kind='fact'    AND state IN ('confirmed','reported','dismissed','origin')) OR
         (kind='finding' AND state IN ('confirmed','dismissed')) OR
         (kind='hint'    AND state IN ('active','consumed')) OR
         (kind='digest'  AND state IN ('active','superseded'))
@@ -215,7 +215,7 @@ BEGIN
     END IF;
 END $$;
 -- ck_node_state: recreate when it lacks the 'paused' (older), 'superseded' (digest rev),
--- or 'deleted' (intent soft-delete rev) branches.
+-- 'deleted' (intent soft-delete rev), or 'reported' (unverified fact) branches.
 DO $$
 BEGIN
     IF EXISTS (
@@ -224,14 +224,15 @@ BEGIN
           AND conname='ck_node_state'
           AND (pg_get_constraintdef(oid) NOT LIKE '%paused%'
                OR pg_get_constraintdef(oid) NOT LIKE '%superseded%'
-               OR pg_get_constraintdef(oid) NOT LIKE '%deleted%')
+               OR pg_get_constraintdef(oid) NOT LIKE '%deleted%'
+               OR pg_get_constraintdef(oid) NOT LIKE '%reported%')
     ) THEN
         ALTER TABLE exploration_nodes DROP CONSTRAINT ck_node_state;
         ALTER TABLE exploration_nodes ADD CONSTRAINT ck_node_state CHECK (
             (kind='begin'   AND state IN ('open')) OR
             (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped','deleted')) OR
             (kind='goal'    AND state IN ('open','met','abandoned')) OR
-            (kind='fact'    AND state IN ('confirmed','dismissed','origin')) OR
+            (kind='fact'    AND state IN ('confirmed','reported','dismissed','origin')) OR
             (kind='finding' AND state IN ('confirmed','dismissed')) OR
             (kind='hint'    AND state IN ('active','consumed')) OR
             (kind='digest'  AND state IN ('active','superseded'))

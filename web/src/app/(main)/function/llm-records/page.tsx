@@ -306,7 +306,7 @@ export default function LLMRecordsPage() {
             className="h-8 pl-8"
           />
         </div>
-        <Input placeholder="Model" className="h-8 w-48" value={model} onChange={(e) => setModel(e.target.value)} />
+        <Input placeholder="모델" className="h-8 w-48" value={model} onChange={(e) => setModel(e.target.value)} />
         <Select value={pickedTask} onValueChange={setPickedTask}>
           <SelectTrigger size="sm" className="w-56">
             <SelectValue placeholder={t("taskPlaceholder")} />
@@ -408,11 +408,11 @@ export default function LLMRecordsPage() {
                 <TableRow>
                   <TableHead className="w-[130px]">{t("colTime")}</TableHead>
                   <TableHead className="w-[60px]">{t("colTask")}</TableHead>
-                  <TableHead className="w-[90px]">Worker</TableHead>
-                  <TableHead className="w-[100px]">Profile</TableHead>
-                  <TableHead className="w-[140px]">Model</TableHead>
+                  <TableHead className="w-[90px]">작업자</TableHead>
+                  <TableHead className="w-[100px]">프로필</TableHead>
+                  <TableHead className="w-[140px]">모델</TableHead>
                   <TableHead className="w-[70px]">{t("colLatency")}</TableHead>
-                  <TableHead className="w-[90px]">Tokens</TableHead>
+                  <TableHead className="w-[90px]">토큰</TableHead>
                   <TableHead className="w-[60px]">{t("colStatus")}</TableHead>
                 </TableRow>
               </TableHeader>

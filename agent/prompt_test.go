@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -93,7 +94,7 @@ func TestLangDirectiveAppendedToUserFacingRoles(t *testing.T) {
 	if !strings.Contains(dir, "한국어") {
 		t.Fatalf("langDirective must force Korean output, got %q", dir)
 	}
-	if !strings.Contains(dir, "payload") || !strings.Contains(dir, "原样逐字保留") {
+	if !strings.Contains(dir, "payload") || !strings.Contains(dir, "그대로 보존") {
 		t.Fatalf("langDirective must keep commands/payloads verbatim, got %q", dir)
 	}
 	// L1 anti-drift hardening: the directive must (1) forbid leaking the Chinese
@@ -101,14 +102,17 @@ func TestLangDirectiveAppendedToUserFacingRoles(t *testing.T) {
 	// drift), and (2) forbid mirroring the target/material language — e.g. an
 	// English target app — in the display fields (report_finding drift). Both
 	// clauses are locked here so a future edit can't silently drop them.
-	if !strings.Contains(dir, "也绝不能把中文输出给用户") {
+	if !strings.Contains(dir, "영어·중국어 문장을 사용자에게 출력하지 마세요") {
 		t.Fatalf("langDirective must forbid leaking Chinese to the user, got %q", dir)
 	}
-	if !strings.Contains(dir, "不要镜像或照抄目标") {
+	if !strings.Contains(dir, "그 언어를 사용자 표시 문장에 따라 쓰지 마세요") {
 		t.Fatalf("langDirective must forbid mirroring the target/material language, got %q", dir)
 	}
-	if !strings.Contains(dir, "态势") {
+	if !strings.Contains(dir, "플래너의 상황 요약") {
 		t.Fatalf("langDirective must name the planner situation summary as user-facing, got %q", dir)
+	}
+	if runtime.GOOS == "windows" && (!strings.Contains(dir, "PowerShell 5.1") || !strings.Contains(dir, "완전히 같은 실패 명령은 다시 호출하지 마세요")) {
+		t.Fatalf("Windows directive must describe shell syntax and stop identical retries, got %q", dir)
 	}
 
 	// Even with a DB body that is pure non-directive text, the code-owned tail is

@@ -79,6 +79,7 @@ func goalsSystem(dataDir string, withScope bool) string {
 	if withScope {
 		sys += goalsScopeTail
 	}
+	sys += "\n\n范围限定句（例如仅/只/만/only 使用某目标）属于 allow，不是 deny；禁止句才是 deny。资产值必须逐字出现在任务目标或描述中，不能用示例域名替代本地 IP。先登记明确约束和范围，再一次调用 set_goals；成功后立即结束，不要重复提交。"
 	return sys + langDirective()
 }
 
@@ -139,7 +140,7 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	// worker="goals" tags the goal nodes' provenance; ts/taskID let set_goals link
 	// each goal under the task root. This is the catalog's real set_goals tool, so a
 	// web-edited description/schema on it applies here too.
-	tsx := &ToolSet{as: as, ts: ts, taskID: taskID, worker: "goals"}
+	tsx := &ToolSet{as: as, ts: ts, taskID: taskID, worker: "goals", declaredScopeText: goalText + "\n" + desc}
 	// Wire add_task_scope only when we have a real asset store + task to write to.
 	// goalsSystem appends the scope-extraction tail in lockstep (withScope) so the
 	// prompt never asks for a tool that isn't present, and it owns the output-language
@@ -171,8 +172,8 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 		Tools:                  tools,
 		PermissionMode:         acperm.ModeBypass,
 		DisableBackgroundTasks: true,
-		// 3 步(抽约束 → 登记范围 → 拆目标)各需一次工具调用,给足回合避免收尾前漏调 set_goals。
-		MaxTurns:     8,
+		// 三类写入加最终答复留出余量，但限制小模型重复提交同一批数据。
+		MaxTurns:     5,
 		NonStreaming: nonStreaming, // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    maxTokens,    // 0 = 不发上限,由服务端默认值决定
 	}, userMsg, captureEmit)
