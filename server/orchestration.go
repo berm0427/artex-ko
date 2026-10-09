@@ -442,6 +442,9 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			if nodeID <= 0 {
 				return actool.Errorf("finding_id 无效"), nil
 			}
+			if err := validateKoreanReportCause(a.Report); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
 			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, a.Report, a.EvidenceVersion)
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
@@ -451,6 +454,25 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			}
 			return actool.Text(fmt.Sprintf("finding %d report updated (%d chars)", nodeID, len(a.Report))), nil
 		})
+}
+
+// A black-box observation cannot establish the implementation-level root cause.
+// Require the Korean reporter to label that part as unverified before saving.
+func validateKoreanReportCause(report string) error {
+	start := strings.Index(report, "## 원인 분석")
+	if start < 0 {
+		return nil
+	}
+	section := report[start+len("## 원인 분석"):]
+	if next := strings.Index(section, "\n## "); next >= 0 {
+		section = section[:next]
+	}
+	for _, caveat := range []string{"미확인", "확인되지", "추정", "가능성", "가설", "알 수 없"} {
+		if strings.Contains(section, caveat) {
+			return nil
+		}
+	}
+	return fmt.Errorf("원인 분석에서 구현상 원인을 확정하지 마세요. 소스 코드나 설정을 확인하지 않았다면 미확인/추정임을 명시한 뒤 보고서를 다시 저장하세요")
 }
 
 // deriveTaskStatus mirrors listTasks' status derivation for the list_tasks tool.
@@ -495,13 +517,15 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedWorkerReadbackRebind()  // 修复旧迁移误删：把 search_all_worker_traces/get_worker_trace/node_detail 补绑回 worker(一次性)
 	s.seedAutoReportFindingBinding()
 	s.unbindGoalMetDefault()
-	s.reseedGoalsPrompt()             // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
-	s.reseedMainAgentPrompt()         // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
-	s.reseedPlannerPrompt()           // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
-	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
-	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
+	s.reseedGoalsPrompt()     // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
+	s.reseedMainAgentPrompt() // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
+	s.reseedPlannerPrompt()   // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
+	s.reseedWorkerPrompt()    // worker 提示词:加否定结论证据门槛(一次性)
+	s.seedReporterAgent()     // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
+	s.reseedReporterPrompt()
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
-	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
+	s.upgradeReporterTriggerKorean()
+	s.seedFindingTrafficTools() // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
@@ -692,11 +716,75 @@ FROM agents a JOIN agent_prompts p ON p.id=a.current_prompt_id WHERE a.id=$1`, a
 // 写成「启用自动绑定才读」,默认关闭配置下 reporter 就不会传 evidence_version,
 // SetFindingReportVersionByNodeID 便按 legacy 语义写 -1,漏洞详情与 Markdown 导出
 // 从此常驻「证据已变更，报告待更新」,而 UI 上没有任何入口能把它清掉。
-const reporterToolCallMessage = "上面刚有一个漏洞被 report_finding 登记。请读取返回 JSON 的 finding_id（独立漏洞记录 ID）与 finding_node_id（探索节点 ID），" +
+const reporterToolCallMessage = "방금 report_finding으로 취약점이 등록됐습니다. 반환 JSON의 finding_id(독립 기록 ID)와 finding_node_id(탐색 노드 ID)를 구분하세요. " +
+	"get_finding_traffic(finding_id)로 증거 목록과 version을 먼저 읽으세요. 빈 목록도 정상입니다. " +
+	"노드 상세는 finding_node_id로 읽고, 실제 도구 호출과 반환값에서 확인한 요청만 보고서에 인용하세요. " +
+	"마지막으로 update_finding_report(finding_id=finding_node_id, report, evidence_version=읽은 version)를 호출하세요. 두 ID를 혼용하지 마세요."
+
+const reporterToolCallMessageChinese = "上面刚有一个漏洞被 report_finding 登记。请读取返回 JSON 的 finding_id（独立漏洞记录 ID）与 finding_node_id（探索节点 ID），" +
 	"先用 get_finding_traffic(finding_id) 读取当前证据清单及其 version（空清单是正常情况，照常写报告）；" +
 	"若运行指引启用自动绑定，在读取前先核实并关联本次漏洞的流量。节点详情使用 finding_node_id。" +
 	"最后调用 update_finding_report(finding_id=finding_node_id, report, evidence_version=实际读取版本) 保存，" +
 	"evidence_version 必须传，否则报告会被永久标记为待更新。不要混用两种编号。"
+
+func (s *Server) upgradeReporterTriggerKorean() {
+	const flag = "reporter_trigger_korean_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	triggers, err := s.m.pg.ListTriggersFor("reporter")
+	if err != nil {
+		log.Printf("[reporter] trigger lookup failed: %v", err)
+		return
+	}
+	for _, t := range triggers {
+		if !t.OnToolCall || (t.ToolCallMessage != reporterToolCallMessageChinese && t.ToolCallMessage != reporterToolCallMessageV1) {
+			continue
+		}
+		t.ToolCallMessage = reporterToolCallMessage
+		if err := s.m.pg.UpdateTrigger(t); err != nil {
+			log.Printf("[reporter] Korean trigger migration failed: %v", err)
+			return
+		}
+	}
+	if err := s.m.pg.SetSetting(flag, "true"); err != nil {
+		log.Printf("[reporter] trigger migration flag failed: %v", err)
+	}
+}
+
+// Only system-owned reporter prompts are migrated; operator edits stay untouched.
+// SavePrompt creates a new version, so the previous default remains recoverable.
+func (s *Server) reseedReporterPrompt() {
+	const flag = "reporter_prompt_korean_evidence_v4"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	a, err := s.m.pg.GetAgentByKey("reporter")
+	if err != nil || a == nil {
+		return
+	}
+	var updatedBy string
+	if err := s.m.pg.QueryRow(`SELECT COALESCE(p.updated_by,'') FROM agents a JOIN agent_prompts p ON p.id=a.current_prompt_id WHERE a.id=$1`, a.ID).Scan(&updatedBy); err != nil {
+		log.Printf("[reporter] prompt owner lookup failed: %v", err)
+		return
+	}
+	if updatedBy == "system" {
+		cur, err := s.m.pg.CurrentPrompt(a.ID)
+		if err != nil {
+			log.Printf("[reporter] current prompt lookup failed: %v", err)
+			return
+		}
+		if cur != agent.ReporterDefaultPrompt {
+			if _, err := s.m.pg.ResetPromptToDefault(a.ID, agent.ReporterDefaultPrompt); err != nil {
+				log.Printf("[reporter] Korean prompt migration failed: %v", err)
+				return
+			}
+		}
+	}
+	if err := s.m.pg.SetSetting(flag, "true"); err != nil {
+		log.Printf("[reporter] prompt migration flag failed: %v", err)
+	}
+}
 
 // 旧版触发消息(0.3.8 及更早)。只有仍与它逐字相同的记录才会被迁移覆盖，用户改过的保持原样。
 const reporterToolCallMessageV1 = "上面刚有一个漏洞被 report_finding 登记。请从触发上下文里取出 finding_id" +

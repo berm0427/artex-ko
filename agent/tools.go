@@ -1037,6 +1037,28 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if strings.TrimSpace(it.Summary) == "" {
 		return 0, fmt.Errorf("summary 不能为空")
 	}
+	// A planner may finish every goal and still have an in-flight add_intent
+	// call from another wake-up. Do not reopen completed work with a stale
+	// plan. A human-driven main-agent continuation has resumeTask set and may
+	// intentionally start new work after completion.
+	if t.resumeTask == nil {
+		goals, err := t.ts.ListByKind(db.KindGoal, 1000)
+		if err != nil {
+			return 0, err
+		}
+		if len(goals) > 0 {
+			allMet := true
+			for _, goal := range goals {
+				if goal.State != "met" {
+					allMet = false
+					break
+				}
+			}
+			if allMet {
+				return 0, fmt.Errorf("모든 작업 목표가 이미 달성되어 새 탐색 의도를 만들 수 없습니다")
+			}
+		}
+	}
 	// A planner may submit the same direction again while a worker is already
 	// executing it. Do not spend a second worker slot on an identical active task.
 	if existing, err := t.ts.ListByKind(db.KindIntent, 1000); err == nil {

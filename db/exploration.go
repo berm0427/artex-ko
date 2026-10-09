@@ -2022,6 +2022,29 @@ ORDER BY id DESC LIMIT 100`, s.expID, intentID)
 					reflect.DeepEqual(bodyValue, quoteValue) {
 					return id, nil
 				}
+				// Some tool-call models express the HTTP tool's string body as a
+				// nested JSON object. Accept it only when both the complete body
+				// and status exactly match the successful tool result. This is a
+				// representation change, not permission to quote a partial or
+				// altered response.
+				var actual, proposed map[string]json.RawMessage
+				if json.Unmarshal([]byte(detail), &actual) == nil &&
+					json.Unmarshal([]byte(quote), &proposed) == nil &&
+					len(actual) == 2 && len(proposed) == 2 &&
+					len(actual["body"]) > 0 && len(actual["status"]) > 0 &&
+					len(proposed["body"]) > 0 && len(proposed["status"]) > 0 {
+					var actualBodyText string
+					var actualBody, proposedBody, actualStatus, proposedStatus any
+					if json.Unmarshal(actual["body"], &actualBodyText) == nil &&
+						json.Unmarshal([]byte(actualBodyText), &actualBody) == nil &&
+						json.Unmarshal(proposed["body"], &proposedBody) == nil &&
+						json.Unmarshal(actual["status"], &actualStatus) == nil &&
+						json.Unmarshal(proposed["status"], &proposedStatus) == nil &&
+						reflect.DeepEqual(actualBody, proposedBody) &&
+						reflect.DeepEqual(actualStatus, proposedStatus) {
+						return id, nil
+					}
+				}
 			}
 		}
 		return 0, rows.Err()

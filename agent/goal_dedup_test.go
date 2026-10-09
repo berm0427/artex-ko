@@ -99,3 +99,29 @@ func TestGoalMetCannotBypassOpenGoal(t *testing.T) {
 		t.Fatalf("open goal bypassed: goalMet=%v result=%q", toolSet.GoalMet, res.Flatten())
 	}
 }
+
+func TestPlannerCannotCreateIntentAfterAllGoalsMet(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTaskWithOptions("completed planning", "local", db.TaskCreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	store := d.Exploration(task.ExplorationID)
+	goalID, err := store.AddGoal(map[string]any{"text": "verified"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetNodeState(goalID, "met"); err != nil {
+		t.Fatal(err)
+	}
+	tools := NewToolSet(store, "planner")
+	if _, err := tools.addOneIntent(intentItem{Summary: "repeat completed test"}); err == nil || !strings.Contains(err.Error(), "이미 달성") {
+		t.Fatalf("completed goal accepted stale intent: %v", err)
+	}
+	intents, err := store.ListByKind(db.KindIntent, 10)
+	if err != nil || len(intents) != 0 {
+		t.Fatalf("stale intent persisted: %v, %v", intents, err)
+	}
+}

@@ -36,6 +36,19 @@ func TestSuccessfulToolQuoteMatchesDecodedHTTPBody(t *testing.T) {
 	if err != nil || got != stepID {
 		t.Fatalf("equivalent JSON body match=%d err=%v, want %d", got, err, stepID)
 	}
+	got, err = s.SuccessfulToolQuote(intentID, `{"body":{"id":"INV-1002","owner":"bob","marker":"BOB-CONFIDENTIAL-INVOICE-LOCAL-LAB"},"status":200}`)
+	if err != nil || got != stepID {
+		t.Fatalf("equivalent HTTP wrapper match=%d err=%v, want %d", got, err, stepID)
+	}
+	for _, changed := range []string{
+		`{"body":{"id":"INV-1002","owner":"alice","marker":"BOB-CONFIDENTIAL-INVOICE-LOCAL-LAB"},"status":200}`,
+		`{"body":{"id":"INV-1002","owner":"bob","marker":"BOB-CONFIDENTIAL-INVOICE-LOCAL-LAB"},"status":403}`,
+	} {
+		got, err = s.SuccessfulToolQuote(intentID, changed)
+		if err != nil || got != 0 {
+			t.Fatalf("altered HTTP wrapper accepted: %d %v", got, err)
+		}
+	}
 	for _, id := range []int64{otherID, 0} {
 		got, err := s.SuccessfulToolQuote(id, body)
 		if err != nil || got != 0 {
