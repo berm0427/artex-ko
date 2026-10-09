@@ -826,6 +826,7 @@ func (m *Manager) Close() error {
 	for _, s := range servers {
 		s.archiveWG.Wait()
 		s.notifierWG.Wait()
+		s.engine.waitShutdown()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -257,6 +257,21 @@ func runTaskRoutine(rt *taskRuntime, fn func(context.Context)) {
 	}()
 }
 
+// waitShutdown waits for task loops after the server context has been canceled.
+// They may still persist their final activity while unwinding, so the database
+// must remain open until all of them have returned.
+func (e *Engine) waitShutdown() {
+	e.runtimeMu.Lock()
+	runtimes := make([]*taskRuntime, 0, len(e.runtimes))
+	for _, rt := range e.runtimes {
+		runtimes = append(runtimes, rt)
+	}
+	e.runtimeMu.Unlock()
+	for _, rt := range runtimes {
+		rt.wg.Wait()
+	}
+}
+
 // StopTask permanently stops every long-lived goroutine and removes all Engine
 // state for a successfully deleted task. The delete barrier remains installed
 // until cleanup finishes, so no new task operation can race the teardown.
