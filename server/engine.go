@@ -270,6 +270,24 @@ func (e *Engine) waitShutdown() {
 	for _, rt := range runtimes {
 		rt.wg.Wait()
 	}
+	// Detached worker continuations are not part of taskRuntime.wg. They retain
+	// an inflight admission until their final database writes have completed.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		active := false
+		e.inflight.Range(func(_, value any) bool {
+			if atomic.LoadInt64(value.(*int64)) > 0 {
+				active = true
+				return false
+			}
+			return true
+		})
+		if !active {
+			return
+		}
+		<-ticker.C
+	}
 }
 
 // StopTask permanently stops every long-lived goroutine and removes all Engine

@@ -117,13 +117,19 @@ func TestChatMentionPagination(t *testing.T) {
 }
 
 func TestChatMentionWorkerReceivesServerDetails(t *testing.T) {
+	// This test constructs a Server without New(), which normally installs the
+	// process-global tool resolver. Do not inherit a resolver bound to a database
+	// closed by the preceding test.
+	agent.ToolResolve = nil
+	t.Cleanup(func() { agent.ToolResolve = nil })
 	m, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
 	defer m.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Server{ctx: ctx, m: m, engine: NewEngine(m)}
+	s := &Server{ctx: ctx, cancel: cancel, m: m, engine: NewEngine(m)}
+	m.registerServer(s)
 	task, err := m.CreateTask("Worker mention test", "Read referenced records", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)

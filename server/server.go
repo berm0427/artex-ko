@@ -181,10 +181,11 @@ type Server struct {
 
 	// Cold task archives run through one persistent FIFO worker. The buffered wake
 	// channel coalesces enqueue bursts; the database remains the source of truth.
-	archiveWake chan struct{}
-	archiveWG   sync.WaitGroup
-	notifierWG  sync.WaitGroup
-	side        *sideQuestionState
+	archiveWake  chan struct{}
+	archiveWG    sync.WaitGroup
+	notifierWG   sync.WaitGroup
+	backgroundWG sync.WaitGroup
+	side         *sideQuestionState
 }
 
 // provEntry is a cached provider + its config for one LLM profile id.
@@ -292,9 +293,17 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		if err := s.seedFindingRetester(); err != nil {
 			log.Printf("[retester] seed: %v", err)
 		}
-		go s.evidenceStore().RunGC(s.ctx)
-		s.seedPythonInterpreter()     // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
-		go newScheduler(s).Run(s.ctx) // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
+		s.backgroundWG.Add(1)
+		go func() {
+			defer s.backgroundWG.Done()
+			s.evidenceStore().RunGC(s.ctx)
+		}()
+		s.seedPythonInterpreter() // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
+		s.backgroundWG.Add(1)
+		go func() {
+			defer s.backgroundWG.Done()
+			newScheduler(s).Run(s.ctx)
+		}() // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
 		// 与触发器的业务节奏不同，且两者失败互不牵连——推送卡住不该影响 agent 触发。
 		// 통합 테스트는 stepRealtime·stepDigest 를 직접 호출해 분배를 결정론적으로
@@ -312,7 +321,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		}
 		// Fill the tool cache for any enabled MCP that has none yet (notably the
 		// seeded browser MCP on first run). Async so it never blocks startup.
-		go s.discoverEmptyMCPsOnStartup()
+		s.backgroundWG.Add(1)
+		go func() {
+			defer s.backgroundWG.Done()
+			s.discoverEmptyMCPsOnStartup()
+		}()
 		logSink.SetDB(s.ctx, m.pg) // restore last 100 log rows and enable async persistence
 	}
 	// precedence: persisted DB config > env.
@@ -332,7 +345,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		log.Printf("[engine] no LLM provider configured — engine idle until set via /api/llm or env")
 	}
 	s.restoreTaskRuntimes()
-	go s.reconcileConcurrency()
+	s.backgroundWG.Add(1)
+	go func() {
+		defer s.backgroundWG.Done()
+		s.reconcileConcurrency()
+	}()
 	s.startTaskArchiveWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	m.registerServer(s)

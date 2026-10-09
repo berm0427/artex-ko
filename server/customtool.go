@@ -202,7 +202,9 @@ func detectPython() string {
 		if p, err := exec.LookPath(c); err == nil {
 			// Windows may resolve python3 to the Microsoft Store app-execution
 			// alias. LookPath succeeds for that stub even though it cannot run code.
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// A loaded Windows host can take more than three seconds to start a
+			// healthy interpreter; do not mistake startup latency for an alias stub.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			cmd := exec.CommandContext(ctx, p, "-c", "import sys; print(sys.version_info.major)")
 			out, runErr := cmd.Output()
 			cancel()

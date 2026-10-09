@@ -33,5 +33,6 @@ func TestManagerCloseStopsServerBackgroundWorkers(t *testing.T) {
 	// waits are safe and would block here if either worker were still running.
 	s.archiveWG.Wait()
 	s.notifierWG.Wait()
+	s.backgroundWG.Wait()
 	s.engine.waitShutdown()
 }
