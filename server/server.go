@@ -106,6 +106,7 @@ type Server struct {
 	m      *Manager
 	engine *Engine
 	ctx    context.Context
+	cancel context.CancelFunc
 
 	skillDir string // root directory for skill subdirectories
 	jwtKey   []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
@@ -182,6 +183,7 @@ type Server struct {
 	// channel coalesces enqueue bursts; the database remains the source of truth.
 	archiveWake chan struct{}
 	archiveWG   sync.WaitGroup
+	notifierWG  sync.WaitGroup
 	side        *sideQuestionState
 }
 
@@ -205,11 +207,12 @@ type triggeredRun struct {
 }
 
 func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDir string) *Server {
+	ctx, cancel := context.WithCancel(ctx)
 	key, err := loadOrCreateJWTKey(keyDir, dataDir)
 	if err != nil {
 		log.Fatalf("[auth] JWT key: %v", err)
 	}
-	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
+	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, cancel: cancel, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
@@ -297,7 +300,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		// 통합 테스트는 stepRealtime·stepDigest 를 직접 호출해 분배를 결정론적으로
 		// 검증하므로, 이 환경 변수로 백그라운드 루프만 끌 수 있다(미설정이 기본).
 		if os.Getenv(notifyBackgroundDisabledEnv) == "" {
-			go newNotifier(s).Run(s.ctx)
+			s.notifierWG.Add(1)
+			go func() {
+				defer s.notifierWG.Done()
+				newNotifier(s).Run(s.ctx)
+			}()
 		} else {
 			// 핵심 기능(취약점 IM 알림 전송)을 끄는 분기라 시작 로그를 남긴다. 이 변수는
 			// 통합 테스트 전용이므로, 운영에서 켜져 있으면 실수나 환경 상속을 의심할 단서가 된다.
@@ -306,7 +313,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		// Fill the tool cache for any enabled MCP that has none yet (notably the
 		// seeded browser MCP on first run). Async so it never blocks startup.
 		go s.discoverEmptyMCPsOnStartup()
-		logSink.SetDB(ctx, m.pg) // restore last 100 log rows and enable async persistence
+		logSink.SetDB(s.ctx, m.pg) // restore last 100 log rows and enable async persistence
 	}
 	// precedence: persisted DB config > env.
 	if cfg, ok := s.loadLLMConfig(); ok {
@@ -328,6 +335,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
+	m.registerServer(s)
 	return s
 }
 

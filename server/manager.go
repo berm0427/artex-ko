@@ -218,6 +218,9 @@ type DeleteTaskResult struct {
 type Manager struct {
 	dir         string
 	pg          *pgdb.DB
+	serversMu   sync.Mutex
+	servers     []*Server
+	serversDone bool
 	assets      *pgdb.AssetStore
 	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
 	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
@@ -812,12 +815,34 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 }
 
 func (m *Manager) Close() error {
+	m.serversMu.Lock()
+	m.serversDone = true
+	servers := append([]*Server(nil), m.servers...)
+	m.servers = nil
+	m.serversMu.Unlock()
+	for _, s := range servers {
+		s.cancel()
+	}
+	for _, s := range servers {
+		s.archiveWG.Wait()
+		s.notifierWG.Wait()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.traffic != nil {
 		m.traffic.Close()
 	}
 	return m.pg.Close()
+}
+
+func (m *Manager) registerServer(s *Server) {
+	m.serversMu.Lock()
+	defer m.serversMu.Unlock()
+	if m.serversDone {
+		s.cancel()
+		return
+	}
+	m.servers = append(m.servers, s)
 }
 
 // isTerminalStatus reports whether a task status is terminal (done/failed/timeout).
