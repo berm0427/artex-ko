@@ -41,7 +41,7 @@ func TestProveGoalRejectsInheritedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Flatten(), "关联任务继承") {
+	if !strings.Contains(result.Flatten(), "연관 작업에서 상속한") {
 		t.Fatalf("expected inherited-evidence rejection, got %q", result.Flatten())
 	}
 	goal, err := store.GetNode(goalID)
