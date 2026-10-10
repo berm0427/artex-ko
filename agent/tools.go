@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -1201,7 +1202,7 @@ func (t *ToolSet) listGoals() actool.CoreTool {
 }
 
 func (t *ToolSet) proveGoal() actool.CoreTool {
-	return t.writeExpTool("prove_goal", "仅当探索图中已有的本任务事实/发现节点直接证明目标已达成时调用。不要用 HTTP 请求成功、工具运行成功、任务方向相符或主观判断充当漏洞/目标证据；遇到关联任务只读节点或无法核实的情况，不要标记达成。",
+	return t.writeExpTool("prove_goal", "이 작업의 검증된 사실 또는 취약점 노드가 목표 달성을 직접 입증할 때만 호출하세요. 단순 HTTP 성공, 도구 실행 성공, 주관적 판단 또는 연관 작업의 읽기 전용 노드를 증거로 쓰지 마세요.",
 		obj(map[string]any{
 			"goal_id":     idp("目标节点 id"),
 			"evidence_id": idp("证明它的发现/事实节点 id"),
@@ -1216,18 +1217,18 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 			_ = json.Unmarshal(in, &a)
 			goal, ev := pid(a.GoalID), pid(a.EvidenceID)
 			if goal == 0 || ev == 0 {
-				return actool.Errorf("goal_id 和 evidence_id 必填"), nil
+				return actool.Errorf("goal_id와 evidence_id가 필요합니다"), nil
 			}
 			goalNode, err := t.ts.GetNode(goal)
 			if err != nil || goalNode == nil || goalNode.Kind != db.KindGoal {
-				return actool.Errorf("goal_id 必须是本任务的目标节点（关联任务目标只读）"), nil
+				return actool.Errorf("goal_id는 현재 작업의 목표 노드여야 합니다. 연관 작업 목표는 읽기 전용입니다"), nil
 			}
 			evidenceNode, err := t.ts.GetNodeWithSources(ev)
 			if err != nil || evidenceNode == nil || (evidenceNode.Kind != db.KindFact && evidenceNode.Kind != db.KindFinding) {
-				return actool.Errorf("evidence_id 必须是本任务或直接关联任务的事实/漏洞节点"), nil
+				return actool.Errorf("evidence_id는 현재 작업의 사실 또는 취약점 노드여야 합니다"), nil
 			}
 			if evidenceNode.Inherited || evidenceNode.SourceTaskID != 0 {
-				return actool.Errorf("关联任务继承的事实/发现只读，不得用于标记本任务目标达成"), nil
+				return actool.Errorf("연관 작업에서 상속한 사실·취약점은 현재 작업의 목표 달성 증거로 사용할 수 없습니다"), nil
 			}
 			var goalPayload struct {
 				VulnClass string `json:"vulnclass"`
@@ -1253,8 +1254,8 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 				}
 				if allMet {
 					t.GoalMet = true
-					t.Reason = fmt.Sprintf("所有 %d 个目标均已 met（最后由 goal %d 触发）", len(goals), goal)
-					return actool.Text(fmt.Sprintf("goal %d marked met；本任务所有目标均已达成，任务自动判定完成", goal)), nil
+					t.Reason = fmt.Sprintf("목표 %d개가 모두 달성됐습니다(마지막 목표 %d)", len(goals), goal)
+					return actool.Text(fmt.Sprintf("목표 %d 달성 확인. 모든 목표가 충족돼 작업이 자동 완료됩니다", goal)), nil
 				}
 			}
 			return actool.Text(fmt.Sprintf("goal %d marked met", goal)), nil
@@ -1311,7 +1312,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		"vulnclass": str("漏洞类别"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
 		"intent_id": idp("当前任务的意图 id"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "受影响资产 id"},
 		"evidence":         str("证据/PoC 文本"),
-		"evidence_quote":   str("本意图中一次成功的工具输出에서 16자 이상 그대로 복사한 핵심 증거. 모델 설명이 아니라 실제 출력 원문이어야 합니다."),
+		"evidence_quote":   str("현재 의도에서 성공한 도구 출력의 본문 한 문장을 16자 이상 그대로 복사하세요. 상태 코드·헤더·본문을 한 문자열로 이어 쓰지 마세요."),
 		"evidence_hint_id": idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
 		"traffic_refs": map[string]any{"type": "array", "description": "可选；HTTP/HTTPS 漏洞先检索并逐条核实请求/响应确实支持漏洞结论，再按复现顺序填写真实 ID。TCP 等非 HTTP 漏洞、未采集或找不到确切记录时省略或传 []，不阻止上报；可在 evidence 说明原因并提供其他可验证证据。不要猜测 ID、按域名/时间推定关联或仅为补包重复探测。用途 baseline 正常对照 / proof 漏洞证明 / verification 补充验证 / supporting 辅助证据。",
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
@@ -1323,7 +1324,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			delete(properties, key)
 		}
 	}
-	return writeTool("report_finding", "검증된 취약점만 기록합니다. Worker는 현재 intent_id와 성공한 도구 출력에서 복사한 evidence_quote를 반드시 별도 JSON 필드로 제출하세요. 단순한 HTTP 200만으로는 취약점이 아닙니다.", obj(properties, required...), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+	return writeTool("report_finding", "검증된 취약점만 기록합니다. Worker는 현재 intent_id와 성공한 도구 출력에서 복사한 evidence_quote를 반드시 별도 JSON 필드로 제출하세요. evidence_quote에는 비공개 내용이 담긴 본문 한 문장을 그대로 넣으세요. 단순한 HTTP 200만으로는 취약점이 아닙니다.", obj(properties, required...), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 		var a struct {
 			VulnClass, Name, Severity, Summary, Evidence string
 			EvidenceQuote                                string            `json:"evidence_quote"`
@@ -1351,12 +1352,49 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			}
 		}
 		if intentID := pid(a.IntentID); intentID > 0 {
+			if deniedAccessEvidence(a.EvidenceQuote) {
+				return actool.Errorf("취약점 미등록: 인용한 응답은 접근 거부 또는 파일 없음입니다. 요청이 실제로 비공개 내용을 반환한 증거를 확인한 뒤 다시 보고하세요"), nil
+			}
 			stepID, err := t.ts.SuccessfulToolQuote(intentID, a.EvidenceQuote)
 			if err != nil {
 				return actool.Errorf("증거 출력 조회 실패: " + err.Error()), nil
 			}
 			if stepID == 0 {
+				// Local models often join real output lines with an invented ';'.
+				// Retain only the longest independently verbatim fragment.
+				parts := strings.FieldsFunc(a.EvidenceQuote, func(r rune) bool { return r == ';' || r == '\n' })
+				for _, part := range append([]string(nil), parts...) {
+					// Model prose may also join two source lines into one paragraph.
+					// A complete sentence still has to match a tool output verbatim.
+					sentences := strings.Split(part, ". ")
+					for i, sentence := range sentences {
+						if i < len(sentences)-1 {
+							sentence += "."
+						}
+						parts = append(parts, sentence)
+					}
+				}
+				sort.Slice(parts, func(i, j int) bool { return len([]rune(parts[i])) > len([]rune(parts[j])) })
+				for _, part := range parts {
+					candidate := strings.TrimSpace(part)
+					if len([]rune(candidate)) < 16 {
+						continue
+					}
+					matchedID, matchErr := t.ts.SuccessfulToolQuote(intentID, candidate)
+					if matchErr != nil {
+						return actool.Errorf("증거 출력 조회 실패: " + matchErr.Error()), nil
+					}
+					if matchedID > 0 {
+						stepID, a.EvidenceQuote = matchedID, candidate
+						break
+					}
+				}
+			}
+			if stepID == 0 {
 				return actool.Errorf("evidence_quote는 이 의도의 성공한 도구 출력에서 그대로 복사한 16자 이상이어야 합니다. 추측한 출력이나 실패한 명령으로 취약점을 등록할 수 없습니다"), nil
+			}
+			if routineHTTPMetadataOnly(a.EvidenceQuote) || publicPageExposureClaim(a.VulnClass, a.Summary, a.EvidenceQuote) {
+				return actool.Errorf("취약점 미등록: 정상 HTTP 200, 표준 응답 헤더 또는 공개 페이지 내용만으로 정보 노출 취약점을 입증할 수 없습니다. 관찰 결과는 record_fact로 기록하고, 실제 비인가 접근이나 민감 정보 노출의 요청·응답 차이를 확인한 경우에만 report_finding을 사용하세요"), nil
 			}
 			a.Evidence += fmt.Sprintf("\n[검증된 도구 출력 #%d] %s", stepID, strings.TrimSpace(a.EvidenceQuote))
 		}
@@ -1409,9 +1447,9 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		}{RecordedFinding: recorded, EvidenceStatus: "bound"}
 		if len(recorded.Traffic.Bindings) == 0 {
 			result.EvidenceStatus = "not_bound"
-			result.EvidenceNote = "漏洞已保存，未绑定流量。TCP/无包情形可正常继续；若已有核实的 HTTP 流量，请用可用的 bind_finding_traffic 或漏洞页面补绑，再完成证据交接。不要重复创建漏洞。"
+			result.EvidenceNote = "취약점이 저장됐지만 트래픽은 연결되지 않았습니다. TCP 또는 미수집 상황에서는 계속 진행할 수 있습니다. 검증된 HTTP 트래픽이 있다면 bind_finding_traffic 또는 취약점 화면에서 연결하세요. 취약점을 중복 등록하지 마세요."
 			if !findingTrafficBindingEnabled() {
-				result.EvidenceNote = "漏洞已保存。Agent 自动绑定流量已关闭，可在页面人工关联流量。"
+				result.EvidenceNote = "취약점이 저장됐습니다. 에이전트의 트래픽 자동 연결이 꺼져 있으므로 화면에서 직접 연결할 수 있습니다."
 			}
 		}
 		raw, _ := json.Marshal(result)
@@ -1478,13 +1516,46 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 	// confirmed observation. This prevents unsupported claims from proving goals.
 	state := "reported"
 	if intent > 0 {
-		stepID, err := t.ts.SuccessfulToolQuote(intent, it.EvidenceQuote)
+		quote := strings.TrimSpace(it.EvidenceQuote)
+		stepID, err := t.ts.SuccessfulToolQuote(intent, quote)
 		if err != nil {
 			return 0, fmt.Errorf("증거 출력 조회 실패: %w", err)
 		}
+		if stepID == 0 && quote == "" {
+			// Small local models sometimes omit evidence_quote and paste selected
+			// non-adjacent output lines into evidence. Only an individual verbatim
+			// line from a successful tool result can confirm the observation.
+			for _, line := range strings.Split(it.Evidence, "\n") {
+				// Ellipses and command/result arrows are model-added separators,
+				// never part of the source output. Each surviving segment still
+				// has to pass the verbatim successful-output lookup.
+				for _, fragment := range strings.Split(line, "...") {
+					for _, part := range strings.Split(fragment, "=>") {
+						candidate := strings.TrimSpace(part)
+						if len([]rune(candidate)) < 16 {
+							continue
+						}
+						matchedID, matchErr := t.ts.SuccessfulToolQuote(intent, candidate)
+						if matchErr != nil {
+							return 0, fmt.Errorf("증거 출력 조회 실패: %w", matchErr)
+						}
+						if matchedID > 0 {
+							quote, stepID = candidate, matchedID
+							break
+						}
+					}
+					if stepID > 0 {
+						break
+					}
+				}
+				if stepID > 0 {
+					break
+				}
+			}
+		}
 		if stepID > 0 {
 			state = "confirmed"
-			payload["evidence_quote"] = strings.TrimSpace(it.EvidenceQuote)
+			payload["evidence_quote"] = quote
 			payload["evidence_activity_id"] = stepID
 		}
 	}
@@ -1504,7 +1575,7 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 	return t.writeExpTool("record_fact", "把探索【事实/结论】写入探索图，连到产生它的意图（intent_id）。用于记录探索结果——包括指纹/枚举等【正向结论】，和'端口关闭'/'参数不可注入'/'未发现登录入口'等【否定结论】。\n"+
 		"⚠️一次探索的多个观察要【汇总成一条事实】，不要拆成多条，可以合并成一条事实的就尽量用一条事实表示：summary=对本次结论的总结性一句话，detail=相关细节（可含多个具体项）。例：指纹意图→一条事实 {summary:'识别了 X 站点的技术栈与响应特征', detail:'nginx 1.25 / Vue3 / 200 / title=.. / body_len=..'}，而不是状态码、指纹、标题各记一条。一条意图通常只产出一条事实，拆太碎会让图谱无限膨胀。\n"+
 		"★facts 数组用于一次写多条【彼此不同】的结论（每条可省略 intent_id，默认用顶层 intent_id）。返回 ids 数组，与 facts 等长同序。\n"+
-		"⚠️只写你在工具输出里【真实看到】的结论，不要脑补。evidence 与 confidence 用来防止不准确的结论污染图谱：\n"+
+		"⚠️只写你在工具输出里【真实看到】的结论，不要脑补。普通 HTTP 200 和公开页面内容属于事实，不是漏洞；不要因此调用 report_finding。evidence 与 confidence 用来防止不准确的结论污染图谱：\n"+
 		"  · evidence=支撑本结论的【一行】关键证据（命令+最能证明的那一两行输出），**务必简洁**——细节已在 detail，这里不要再粘大段输出。\n"+
 		"  · confidence=observed（输出里直接看到）| inferred（据现象推断）。\n"+
 		"  · **否定类结论**（不可注入/端口关闭/未发现入口等）只写\"观察 + 试探性读法\"——陈述你实际看到什么，方向是否放弃由规划者综合全局定；务必给 evidence，手段没穷尽或证据弱（含只探一次、看起来像）标 inferred，确已穷尽且直接看到才标 observed。",
@@ -1514,7 +1585,7 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 			"intent_id":      idp("产生本事实的意图 id（你领到的意图；批量时作为各条默认）"),
 			"detail":         str("本事实的相关细节：把这次探索的多个观察事实都写进这里"),
 			"evidence":       str("【一行】关键证据：命令 + 最能证明结论的那一两行输出。务必简洁，不要粘大段输出（细节放 detail）。"),
-			"evidence_quote": str("성공한 도구 출력에서 16자 이상 그대로 복사한 핵심 부분. 일치할 때만 사실을 confirmed로 표시하며, 없거나 일치하지 않으면 reported로 표시합니다."),
+			"evidence_quote": str("성공한 도구 출력에서 16자 이상 그대로 복사한 핵심 부분. evidence와 별도 JSON 필드입니다. 누락 시 evidence가 출력 원문과 정확히 일치하면 대신 검사합니다."),
 			"confidence":     str("observed（输出里直接看到）| inferred（据现象推断）。否定结论务必如实标注。"),
 			"asset_ids":      map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "相关资产 id（可选，0/1/多个）：该事实涉及哪些资产"},
 		}),
@@ -1547,9 +1618,9 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 					return actool.Errorf(e), nil
 				}
 				if node, err := t.ts.GetNode(ids[0]); err == nil && node != nil && node.State == "reported" {
-					return actool.Text(fmt.Sprintf("fact recorded: %d (reported; 성공한 도구 출력과 일치하는 evidence_quote가 없어 미확인 상태)", ids[0])), nil
+					return actool.Text(fmt.Sprintf("fact recorded: %d (reported; 사실은 이미 저장됐으니 같은 내용을 반복 등록하지 마세요. confirmed가 필요하면 성공한 도구 출력의 16자 이상 원문을 evidence_quote 별도 필드에 넣어야 합니다. 이 상태를 취약점으로 바꿔 report_finding 하지 마세요)", ids[0])), nil
 				}
-				return actool.Text(fmt.Sprintf("fact recorded: %d", ids[0])), nil
+				return actool.Text(fmt.Sprintf("fact recorded: %d (confirmed; 성공한 도구 출력으로 확인됨. 같은 사실을 반복 등록하거나 취약점으로 보고하지 마세요)", ids[0])), nil
 			}
 			out := map[string]any{"ids": ids}
 			if len(errs) > 0 {
@@ -1597,10 +1668,58 @@ type goalItem struct {
 	VulnClass string `json:"vulnclass"`
 }
 
+// The goal decomposer may guess a vulnerability class from the test technique.
+// Preserve only classes explicitly named by the operator in this task; other
+// agents can still add evidence-backed classifications later.
+func normalizeDecomposedGoal(it goalItem, taskText string) goalItem {
+	it.Text = strings.TrimSpace(it.Text)
+	it.VulnClass = strings.TrimSpace(it.VulnClass)
+	if strings.HasPrefix(it.Text, "[") {
+		if end := strings.IndexByte(it.Text, ']'); end > 1 && end <= 41 {
+			label := strings.TrimSpace(it.Text[1:end])
+			if label != "" && !explicitClassMention(taskText, label) {
+				it.Text = strings.TrimSpace(it.Text[end+1:])
+			}
+		}
+	}
+	if it.VulnClass != "" && !explicitClassMention(taskText, it.VulnClass) {
+		it.VulnClass = ""
+	}
+	return it
+}
+
+func explicitClassMention(taskText, class string) bool {
+	source, label := strings.ToLower(taskText), strings.ToLower(strings.TrimSpace(class))
+	if label == "" {
+		return false
+	}
+	for pos := 0; pos < len(source); {
+		idx := strings.Index(source[pos:], label)
+		if idx < 0 {
+			return false
+		}
+		idx += pos
+		end := idx + len(label)
+		if (idx == 0 || !asciiWordByte(source[idx-1])) &&
+			(end == len(source) || !asciiWordByte(source[end])) {
+			return true
+		}
+		pos = idx + 1
+	}
+	return false
+}
+
+func asciiWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '_'
+}
+
 // addOneGoal 挂一条 goal 节点(open)到探索图:连到任务根(origin fact,rel spawns)。
 // origin 取 t.worker(缺省 system):goals 拆解器写入的记 "goals"、主 agent 运行时记
 // "human"。唤醒 planner 由 setGoals 在整批写完后统一做(见下),这里只负责落库。
 func (t *ToolSet) addOneGoal(it goalItem) (int64, bool, error) {
+	if t.worker == "goals" {
+		it = normalizeDecomposedGoal(it, t.declaredScopeText)
+	}
 	text := strings.TrimSpace(it.Text)
 	if text == "" {
 		return 0, false, fmt.Errorf("text 不能为空")
@@ -1642,11 +1761,11 @@ func (t *ToolSet) setGoals() actool.CoreTool {
 	return writeTool("set_goals",
 		"给【本任务】新增探索目标(goal)。目标=最终可交付/可核验的结果,不是攻击步骤或侦察动作。\n"+
 			"★优先批量:多个目标放进 goals 数组一次提交,返回 ids 与之等长同序(失败项 id=0,详情见 errors)。单条则省略 goals 直接给顶层 text。\n"+
-			"vulnclass 可选:对应漏洞类(如 SQLi/IDOR),业务逻辑类目标留空。目标是否达成由系统判定标记 met,本工具只负责新增。",
+			"vulnclass 可选:仅在用户明确指定漏洞类别时填写；不得根据测试行为推断。目标是否达成由系统判定标记 met,本工具只负责新增。",
 		obj(map[string]any{
 			"goals":     map[string]any{"type": "array", "description": "【优先用这个】要新增的目标数组,按顺序处理。每个元素:text(必填,一个独立可验证的最终目标)+ vulnclass(可选)。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
 			"text":      str("[单条] 一个独立可验证的最终目标"),
-			"vulnclass": str("[单条] 对应漏洞类(若明确),如 SQLi/IDOR;业务逻辑目标可留空"),
+			"vulnclass": str("[单条] 用户明确指定的漏洞类别；未指定时留空"),
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			if t.ts == nil {

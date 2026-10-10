@@ -256,6 +256,7 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 		retries, backoffOf := sameProviderRetryPolicy(selection.retry)
 		for attempt := 0; ; attempt++ {
 			msg, sr, usage, callErr = selection.provider.Complete(ctx, req)
+			callErr = normalizeContextOverflowError(callErr)
 			if callErr != nil && ctx.Err() == nil &&
 				attempt < retries && isRetryableStreamError(callErr) {
 				backoff := backoffOf(attempt)
@@ -310,7 +311,7 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 				streamErr = nil
 				for event, err := range selection.provider.Stream(ctx, req) {
 					if err != nil {
-						streamErr = err
+						streamErr = normalizeContextOverflowError(err)
 						break
 					}
 					if !committed && !streamEventCommitsOutput(event) {
@@ -386,6 +387,20 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 			// the next profile cannot duplicate model output or tool execution.
 		}
 	}
+}
+
+// LM Studio reports context overflow as "Context size has been exceeded".
+// Norma's reactive compactor and summary retry recognize "context length" but
+// not that wording. Preserve the original provider error while making the
+// condition recognizable; otherwise a recoverable overflow becomes model_error.
+func normalizeContextOverflowError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "context size has been exceeded") {
+		return fmt.Errorf("context length exceeded: %w", err)
+	}
+	return err
 }
 
 func streamEventCommitsOutput(event llm.StreamEvent) bool {

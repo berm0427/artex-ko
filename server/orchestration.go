@@ -517,7 +517,8 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedWorkerReadbackRebind()  // 修复旧迁移误删：把 search_all_worker_traces/get_worker_trace/node_detail 补绑回 worker(一次性)
 	s.seedAutoReportFindingBinding()
 	s.unbindGoalMetDefault()
-	s.reseedGoalsPrompt()     // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
+	s.reseedGoalsPrompt() // goals 提示词加入「抽操作约束」步 → 旧库追加一版新默认(一次性)
+	s.reseedKoreanGoalsPrompt()
 	s.reseedMainAgentPrompt() // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
 	s.reseedPlannerPrompt()   // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
 	s.reseedWorkerPrompt()    // worker 提示词:加否定结论证据门槛(一次性)
@@ -615,6 +616,39 @@ func (s *Server) reseedGoalsPrompt() {
 		return
 	}
 	log.Printf("[prompts] goals 提示词已追加新默认版本(加入抽操作约束步,一次性)")
+}
+
+// Replace only the system-owned goals prompt. Preserve operator edits and keep
+// the previous prompt version available for rollback in the UI.
+func (s *Server) reseedKoreanGoalsPrompt() {
+	const flag = "goals_prompt_ko_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	a, err := s.m.pg.GetAgentByKey("goals")
+	if err != nil || a == nil {
+		return
+	}
+	var updatedBy string
+	if err := s.m.pg.QueryRow(`SELECT COALESCE(p.updated_by,'')
+FROM agents a JOIN agent_prompts p ON p.id=a.current_prompt_id WHERE a.id=$1`, a.ID).Scan(&updatedBy); err != nil {
+		return
+	}
+	if updatedBy != "system" {
+		_ = s.m.pg.SetSetting(flag, "true")
+		return
+	}
+	tmpl := agent.BuiltinPromptSeeds()["goals"]
+	if tmpl == "" {
+		return
+	}
+	if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
+		if _, err := s.m.pg.ResetPromptToDefault(a.ID, tmpl); err != nil {
+			log.Printf("[prompts] 한국어 목표 분해 프롬프트 갱신 실패: %v", err)
+			return
+		}
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
 }
 
 // reseedMainAgentPrompt 把 mainagent 提示词刷成【当前代码默认】——默认正文新增了「目标全部

@@ -7,9 +7,10 @@ param(
     [string]$ProfileName = 'LM Studio Local',
     [int]$Port = 1234,
     [ValidateRange(1, 1000)] [int]$ContextWindowK = 16,
-    [ValidateRange(1, 1048576)] [int]$MaxTokens = 4096,
+    [ValidateRange(0, 1048576)] [int]$MaxTokens = 4096,
     [ValidateRange(1, 32)] [int]$Parallel = 2,
     [ValidateRange(1, 32)] [int]$Workers = 2,
+    [switch]$NonStreaming,
     [string]$PsqlPath = '',
     [switch]$NoLoad
 )
@@ -115,6 +116,7 @@ if (-not $psql -or -not (Test-Path -LiteralPath $psql)) {
 }
 
 $db = $config.database
+$streaming = if ($NonStreaming) { 'false' } else { 'true' }
 $sql = @'
 BEGIN;
 UPDATE llm_profiles SET is_default=false WHERE is_default AND name <> :'profile_name';
@@ -123,13 +125,13 @@ INSERT INTO llm_profiles(
     context_window_k, is_default, streaming, max_tokens, max_tokens_field
 ) VALUES (
     :'profile_name', 'openai', :'base_url', :'model', 'lm-studio', '…udio',
-    :'context_k', true, true, :'max_tokens', ''
+    :'context_k', true, :'streaming'::boolean, :'max_tokens', ''
 )
 ON CONFLICT (name) DO UPDATE SET
     format=EXCLUDED.format, base_url=EXCLUDED.base_url, model=EXCLUDED.model,
     api_key=EXCLUDED.api_key, api_key_hint=EXCLUDED.api_key_hint,
     context_window_k=EXCLUDED.context_window_k, is_default=true,
-    streaming=true, max_tokens=EXCLUDED.max_tokens, max_tokens_field='',
+    streaming=EXCLUDED.streaming, max_tokens=EXCLUDED.max_tokens, max_tokens_field='',
     updated_at=now();
 INSERT INTO settings(key,value) VALUES ('workers', :'workers')
 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now();
@@ -141,7 +143,7 @@ $env:PGPASSWORD = [string]$db.password
 try {
     $sql | & $psql -X -v ON_ERROR_STOP=1 `
         -v "profile_name=$ProfileName" -v "base_url=$baseUrl" -v "model=$Model" `
-        -v "context_k=$ContextWindowK" -v "max_tokens=$MaxTokens" -v "workers=$Workers" `
+        -v "context_k=$ContextWindowK" -v "max_tokens=$MaxTokens" -v "workers=$Workers" -v "streaming=$streaming" `
         -h ([string]$db.host) -p ([string]$db.port) -U ([string]$db.user) -d ([string]$db.dbname)
     if ($LASTEXITCODE -ne 0) {
         throw 'ARTEX 데이터베이스 설정 실패. ARTEX를 한 번 시작해 스키마를 만든 뒤 다시 실행하세요.'
@@ -155,3 +157,4 @@ Write-Host 'LM Studio 자동 연결 완료' -ForegroundColor Green
 Write-Host "모델: $Model"
 Write-Host "API: $baseUrl"
 Write-Host "컨텍스트: ${ContextWindowK}K / 병렬: $Parallel / ARTEX Worker: $Workers"
+Write-Host "스트리밍: $streaming / 응답 상한(0=공급자 기본): $MaxTokens"

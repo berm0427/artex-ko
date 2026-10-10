@@ -132,7 +132,16 @@ func compactionConfig(windowTokens int) *compaction.Config {
 	if windowTokens <= 0 {
 		windowTokens = defaultWindowK * 1000
 	}
-	return &compaction.Config{ContextWindow: windowTokens}
+	cfg := &compaction.Config{ContextWindow: windowTokens}
+	// Norma's default recent tail (8 messages) is sized for large cloud-model
+	// windows. At 32K the preserved tail alone can fill the entire window,
+	// leaving nothing eligible for reactive summarization after an overflow.
+	// Keep a complete recent tool-use/result pair while allowing older turns to
+	// be summarized on local models.
+	if windowTokens <= 64_000 {
+		cfg.KeepRecent = 2
+	}
+	return cfg
 }
 
 // FromEnv resolves the LLM provider config:

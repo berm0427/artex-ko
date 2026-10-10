@@ -13,6 +13,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 )
@@ -105,6 +106,33 @@ func collectTaskLLMStream(seq iter.Seq2[llm.StreamEvent, error]) ([]llm.StreamEv
 		events = append(events, event)
 	}
 	return events, streamErr
+}
+
+func TestLMStudioContextSizeErrorRecognizedByCompactor(t *testing.T) {
+	providerErr := errors.New(`openai: status 400: {"error":"Engine protocol predict stream returned an error: {\"code\":500,\"message\":\"Context size has been exceeded.\"}"}`)
+	if compaction.IsOverflow(providerErr) {
+		t.Fatal("regression fixture must not already be recognized by Norma")
+	}
+	for _, streaming := range []bool{false, true} {
+		provider := &scriptedLLMProvider{err: providerErr}
+		hooks := taskLLMStreamHooks{
+			current: func() (taskLLMSelection, error) {
+				return taskLLMSelection{profileID: 11, provider: provider}, nil
+			},
+		}
+		var got error
+		if streaming {
+			_, got = collectTaskLLMStream(streamTaskLLM(context.Background(), "7", llm.CompletionRequest{}, hooks))
+		} else {
+			_, _, _, got = completeTaskLLM(context.Background(), "7", llm.CompletionRequest{}, hooks)
+		}
+		if !errors.Is(got, providerErr) || !compaction.IsOverflow(got) {
+			t.Fatalf("streaming=%v: want preserved, recognizable overflow; got %v", streaming, got)
+		}
+		if provider.calls != 1 {
+			t.Fatalf("streaming=%v: deterministic overflow retried %d times", streaming, provider.calls)
+		}
+	}
 }
 
 func TestIsQuotaExhaustedError(t *testing.T) {

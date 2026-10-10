@@ -929,7 +929,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		// round marker: each Plan() is one planner round; emit a boundary so the
 		// UI can separate rounds in the transcript (kind='round').
 		e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round",
-			Summary: fmt.Sprintf("第 %d 轮规划", e.nextPlannerRound(t.ID))})
+			Summary: fmt.Sprintf("%d차 계획", e.nextPlannerRound(t.ID))})
 		// what fired this round (worker done / finding; may be several — debounce
 		// coalesces a burst; empty for time/heartbeat wakes).
 		triggers := t.drainTriggers()
