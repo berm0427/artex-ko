@@ -61,18 +61,26 @@ export interface SelectedMention {
 
 // 기존 대화의 중국어 토큰도 파싱하되 새 토큰은 한국어 분류명으로 만듭니다.
 const legacyMentionKinds: Record<string, MentionKind> = {
-  "漏洞": "finding", "资产": "asset", "企业": "company", "接口": "endpoint",
-  "应用": "app", "域名": "root_domain", "子域名": "subdomain", "服务": "service",
+  漏洞: "finding",
+  资产: "asset",
+  企业: "company",
+  接口: "endpoint",
+  应用: "app",
+  域名: "root_domain",
+  子域名: "subdomain",
+  服务: "service",
 };
 
 export function selectedMentions(value: string): SelectedMention[] {
-  return [...value.matchAll(/@\[(취약점|자산|기업|엔드포인트|IP|앱|도메인|서브도메인|서비스|漏洞|资产|企业|接口|应用|域名|子域名|服务)#([0-9]+)(?: ([^\]\r\n]*))?\]/g)].map(
-    (match) => ({
-      token: match[0],
-      kind: mentionKinds.find((entry) => entry.label === match[1])?.kind ?? legacyMentionKinds[match[1]] ?? "asset",
-      id: match[2],
-      text: match[3] ?? "",
-      start: match.index,
-    }),
-  );
+  return [
+    ...value.matchAll(
+      /@\[(취약점|자산|기업|엔드포인트|IP|앱|도메인|서브도메인|서비스|漏洞|资产|企业|接口|应用|域名|子域名|服务)#([0-9]+)(?: ([^\]\r\n]*))?\]/g,
+    ),
+  ].map((match) => ({
+    token: match[0],
+    kind: mentionKinds.find((entry) => entry.label === match[1])?.kind ?? legacyMentionKinds[match[1]] ?? "asset",
+    id: match[2],
+    text: match[3] ?? "",
+    start: match.index,
+  }));
 }
