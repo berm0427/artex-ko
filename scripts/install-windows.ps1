@@ -118,6 +118,10 @@ Push-Location $repoRoot
 try {
     & $goExe build -tags embedui -trimpath -o artex.exe .\cmd\artex
     if ($LASTEXITCODE -ne 0) { throw 'Go 빌드 실패' }
+    $chatgptBridgeDir = Join-Path $env:LOCALAPPDATA 'ARTEX'
+    New-Item -ItemType Directory -Path $chatgptBridgeDir -Force | Out-Null
+    & $goExe build -trimpath -o (Join-Path $chatgptBridgeDir 'chatgpt-plan-bridge.exe') .\cmd\chatgpt-plan-bridge
+    if ($LASTEXITCODE -ne 0) { throw 'ChatGPT 구독 브리지 빌드 실패' }
 } finally {
     Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue
     Pop-Location

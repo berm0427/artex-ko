@@ -283,6 +283,8 @@ REA 브리지는 Windows 파일 절대 경로를 WSL `/mnt/<드라이브>/...`�
 
 **LLM:** `export ANTHROPIC_API_KEY=sk-...`(또는 `OPENAI_API_KEY`), 혹은 UI 의 "LLM 설정" 페이지에서 입력합니다. 선택 환경 변수로 `ARTEX_LLM_PROVIDER` / `ARTEX_LLM_MODEL` / `ARTEX_LLM_BASE_URL` / `ARTEX_LLM_PROXY` 를 둘 수 있습니다. 국산·오픈 모델을 쓰려면 OpenAI 호환 `ARTEX_LLM_BASE_URL` 을 지정하십시오.
 
+**ChatGPT Plus/Pro 구독(Windows 로컬 설치, 시험 통합):** 공식 OAuth 로그인으로 ARTEX의 Responses 프로필을 구독 사용량에 연결하는 방법은 [ChatGPT 구독 연동 안내](docs/ChatGPT-구독-연동.md)를 참고하십시오. OpenAI API 키나 Codex 앱 인증 파일을 재사용하는 방식이 아니며, 별도의 로컬 브리지를 실행해야 합니다. 실사용 전 로그인·계정별 모델·도구 호출을 테스트하세요.
+
 **동시성:** 작업마다 돌리는 worker 에이전트 수는 "시스템 설정"에서 조정합니다(기본값 3).
 
 **자주 쓰는 인자:** `./start.sh -addr :8787 -proxy :8788` — `-addr` 는 프런트엔드와 API, `-proxy` 는 트래픽 기록 프록시 포트입니다.
