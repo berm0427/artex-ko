@@ -558,6 +558,10 @@ function ProfileSheet({
             <Input
               id="p-api-key"
               type="password"
+              name="artex-llm-profile-api-key"
+              autoComplete="new-password"
+              data-lpignore="true"
+              data-1p-ignore
               placeholder={keyHint ? t("profile.apiKey.placeholderSet", { hint: keyHint }) : "sk-…"}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
