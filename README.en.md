@@ -119,6 +119,12 @@ Upstream provides several methods: an install script (`./install.sh`), precompil
 
 > Launch with `start.sh` (`start.bat` on Windows) rather than running `./artex` directly. That script is a supervisor that restarts the program based on its exit code, and it also handles the UI's "one-click update."
 
+### Windows quick start and optional REA integration
+
+Install Node.js and Git, then clone this fork and run `scripts/install-windows.ps1 -NoStart -SkipLMStudio` from PowerShell. Run `START-ARTEX-KO.cmd`, create an administrator on `/setup`, and configure an LLM in the UI. The installer downloads verified Go/PostgreSQL archives and builds the frontend and executable. Private `config.json`, database state, API keys, model weights, and downloaded runtimes are intentionally excluded from Git.
+
+For REA binary analysis on Windows, install WSL with Node.js, Java, `rea-agents@6.4.0`, and Ghidra inside the distribution. See the [upstream REA instructions](https://github.com/morluto/rea) and [official Ghidra releases](https://github.com/NationalSecurityAgency/ghidra/releases). Then run `scripts/configure-rea-wsl.ps1 -Distro Ubuntu -GhidraDir /path/to/ghidra` (optionally supply `-ReaEntry /path/to/rea.mjs`). This validates the MCP bridge, discovers tools, and registers REA for the worker. Refresh its tools on System → MCP. REA and Ghidra binaries are external dependencies, not vendored into this repository.
+
 ---
 
 ## Configuration

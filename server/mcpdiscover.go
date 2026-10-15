@@ -97,7 +97,7 @@ func (s *Server) discoverEmptyMCPsOnStartup() {
 		if !m.Enabled || len(m.Tools) > 0 {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(s.ctx, 90*time.Second)
+		ctx, cancel := context.WithTimeout(s.ctx, 240*time.Second)
 		if err := s.discoverAndCacheMCP(ctx, m); err != nil {
 			log.Printf("[mcp] 시작 시 %s 자동 발견에 실패했습니다: %v", m.Name, err)
 		}

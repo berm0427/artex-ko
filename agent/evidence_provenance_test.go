@@ -64,7 +64,20 @@ func TestObservedFactRequiresVerbatimSuccessfulToolOutput(t *testing.T) {
 			}
 		}
 	}
-	id, err := tool.recordOneFact(factItem{Summary: "verbatim evidence field", IntentID: intentRaw, Evidence: "real-response-body-marker"}, 0)
+	id, err := tool.recordOneFact(factItem{Summary: "unsupported observed claim", IntentID: intentRaw, Confidence: "observed", EvidenceQuote: "made-up-response-body"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported, err := store.GetNode(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unsupportedPayload map[string]any
+	_ = json.Unmarshal(unsupported.Payload, &unsupportedPayload)
+	if unsupported.State != "reported" || unsupportedPayload["confidence"] != "inferred" || unsupportedPayload["verification_warning"] == nil {
+		t.Fatalf("unsupported observed claim was not downgraded: state=%q payload=%s", unsupported.State, unsupported.Payload)
+	}
+	id, err = tool.recordOneFact(factItem{Summary: "verbatim evidence field", IntentID: intentRaw, Evidence: "real-response-body-marker"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +257,43 @@ func TestFindingRejectsUnmatchedEvidenceQuote(t *testing.T) {
 	}
 }
 
+func TestFindingRejectsProtocolEchoAsExploitProof(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTaskWithOptions("protocol echo evidence", "local", db.TaskCreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	store := d.Exploration(task.ExplorationID)
+	intentID, err := store.AddIntent(map[string]any{"summary": "inspect TCP response"}, 1, nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := "Your input is 'A"
+	if _, err := store.AppendActivity(db.Activity{NodeID: &intentID, Kind: "tool_result", Tool: "tcp_session", Detail: "Your input is 'A\n'\n[2] Next input: "}); err != nil {
+		t.Fatal(err)
+	}
+	set := NewToolSet(store, "worker")
+	set.SetTaskID(task.ID)
+	set.SetOwnerNode(intentID)
+	input := fmt.Sprintf(`{"intent_id":%d,"vulnclass":"buffer-overflow","severity":"high","summary":"return address overwrite","evidence_quote":%q}`, intentID, quote)
+	result, err := set.addFinding().Call(context.Background(), json.RawMessage(input), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Flatten(), "취약점 미등록") {
+		t.Fatalf("protocol echo accepted as exploit proof: %q", result.Flatten())
+	}
+	var count int
+	if err := d.QueryRow(`SELECT count(*) FROM findings WHERE task_id=$1`, task.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("protocol echo persisted %d findings", count)
+	}
+}
+
 func TestFindingRejectsRoutineHTTP200Evidence(t *testing.T) {
 	d := testDB(t)
 	defer d.Close()
@@ -272,5 +322,35 @@ func TestFindingRejectsRoutineHTTP200Evidence(t *testing.T) {
 	var count int
 	if err := d.QueryRow(`SELECT count(*) FROM findings WHERE task_id=$1`, task.ID).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("routine response persisted finding: count=%d err=%v", count, err)
+	}
+}
+
+func TestMainAgentFindingUsesOwnVerbatimToolOutput(t *testing.T) {
+	d := testDB(t)
+	defer d.Close()
+	task, err := d.CreateTaskWithOptions("main evidence", "local", db.TaskCreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	store := d.Exploration(task.ExplorationID)
+	intentID, err := store.AddIntent(map[string]any{"summary": "verify command"}, 1, nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := "uid=1000(out_of_bound) gid=1000(out_of_bound)"
+	if _, err := store.AppendActivity(db.Activity{Worker: "mainagent", Kind: "tool_result", Tool: "Bash", Detail: quote}); err != nil {
+		t.Fatal(err)
+	}
+	toolSet := NewToolSet(store, "human")
+	toolSet.SetTaskID(task.ID)
+	input, _ := json.Marshal(map[string]any{"intent_id": intentID, "vulnclass": "OOB command execution", "severity": "high", "summary": "범위 밖 포인터로 명령 실행", "evidence_quote": quote})
+	res, err := toolSet.addFinding().Call(t.Context(), input, nil)
+	if err != nil || !strings.Contains(res.Flatten(), "finding recorded:") {
+		t.Fatalf("main-agent proof rejected: %v %q", err, res.Flatten())
+	}
+	var linkedCount int
+	if err := d.QueryRow(`SELECT count(*) FROM exploration_edges WHERE exploration_id=$1 AND src_id=$2 AND rel=$3`, task.ExplorationID, intentID, db.RelYields).Scan(&linkedCount); err != nil || linkedCount != 0 {
+		t.Fatalf("main evidence must not be attributed to worker intent: count=%d err=%v", linkedCount, err)
 	}
 }

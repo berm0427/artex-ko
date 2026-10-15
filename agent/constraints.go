@@ -45,15 +45,15 @@ func renderConstraintRows(rows []db.Constraint) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n\n【操作约束（最高优先级，凌驾于下方一切探索/拓面启发式；每生成一条意图、每执行一个动作前都必须先自检是否违反，违反即不得进行）】：")
+	b.WriteString("\n\n[운영 제약: 최우선 규칙. 아래의 모든 탐색·범위 확장 지침보다 우선합니다. 의도를 생성하거나 행동하기 전에 위반 여부를 확인하고, 위반하면 진행하지 마세요]:")
 	if len(allow) > 0 {
-		b.WriteString("\n允许的操作：\n")
+		b.WriteString("\n허용된 행동:\n")
 		b.WriteString(strings.Join(allow, "\n"))
 	}
 	if len(deny) > 0 {
-		b.WriteString("\n禁止的操作：\n")
+		b.WriteString("\n금지된 행동:\n")
 		b.WriteString(strings.Join(deny, "\n"))
 	}
-	b.WriteString("\n（发现约束之外的新目标/新端口/新主机，不等于获得授权：除非它落在上述允许范围内，否则记为 out-of-scope 事实并跳过，不得为其派生意图或执行动作。）")
+	b.WriteString("\n(제약 밖의 새 대상·포트·호스트를 발견해도 승인된 것은 아닙니다. 위의 허용 범위에 속하지 않으면 out-of-scope 사실로 기록하고 건너뛰세요. 이에 대한 의도를 만들거나 행동하지 마세요.)")
 	return b.String()
 }

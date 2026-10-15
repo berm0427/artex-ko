@@ -317,8 +317,8 @@ func ValidateAssetIP(value string) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"%w: ip 必须是 IPv4/IPv6 地址，收到 %q。若这是主机名，请改用 type=subdomain 并填 domain 字段；"+
-			"若确实要登记地址，请先解析出 A/AAAA 记录，再用解析出的地址填 ip",
+		"%w: ip에는 IPv4/IPv6 주소만 입력할 수 있습니다. 받은 값: %q. 호스트 이름이라면 type=subdomain으로 바꾸고 domain 필드를 입력하세요. "+
+			"주소를 등록하려면 먼저 A/AAAA 레코드를 조회해 실제 주소를 ip에 입력하세요",
 		ErrAssetIPInvalid, value)
 }
 

@@ -157,14 +157,14 @@ func (s *Server) startFindingRetest(w http.ResponseWriter, r *http.Request) {
 // arguments cannot redirect a result into a different finding or conversation.
 func (s *Server) findingRetestTools() []actool.CoreTool {
 	return []actool.CoreTool{
-		roTool("get_finding_retest_context", "读取当前复测会话关联的漏洞证据快照、复测状态、补充说明与当前任务约束。无参数，只能读取本会话。",
+		roTool("get_finding_retest_context", "현재 재검증 세션에 연결된 취약점 증거 스냅샷, 재검증 상태, 추가 설명과 현재 작업 제약을 읽습니다. 인자는 없으며 현재 세션만 조회할 수 있습니다.",
 			objSchema(map[string]any{}), func(ctx context.Context, _ json.RawMessage) (actool.Result, error) {
 				r, err := s.m.pg.FindingRetestForConversation(ctx, intercept.ConvIDFromContext(ctx))
 				if err != nil {
 					return actool.Errorf(err.Error()), nil
 				}
 				if r == nil {
-					return actool.Errorf("当前会话未关联复测记录，请从漏洞详情发起复测"), nil
+					return actool.Errorf("현재 세션에 연결된 재검증 기록이 없습니다. 취약점 상세 화면에서 재검증을 시작하세요"), nil
 				}
 				var constraints []db.Constraint
 				f, err := s.m.pg.GetFinding(r.FindingID)
@@ -181,11 +181,11 @@ func (s *Server) findingRetestTools() []actool.CoreTool {
 				}
 				return jsonResult(map[string]any{"retest": r, "current_constraints": constraints})
 			}),
-		wrTool("record_finding_retest_result", "为当前复测会话保存唯一结论；原漏洞证据与报告保持不变。会话成功结束且结论为 fixed 时，系统自动将漏洞状态改为已修复；其他结论保留原状态。必须提供本次实际检查的证据，无法确认时写明阻塞原因。",
+		wrTool("record_finding_retest_result", "현재 재검증 세션에 단 하나의 결론을 저장합니다. 원래 증거와 보고서는 바뀌지 않습니다. 세션이 성공적으로 끝나고 결론이 fixed이면 시스템이 취약점 상태를 자동으로 수정됨으로 바꿉니다. 다른 결론은 원래 상태를 유지합니다. 이번에 실제로 확인한 증거를 제시하고, 확인할 수 없었다면 장애 요인을 설명하세요.",
 			objSchema(map[string]any{
 				"verdict":  map[string]any{"type": "string", "enum": []string{"reproduced", "fixed", "inconclusive"}},
-				"summary":  strParam("本次复测结论摘要"),
-				"evidence": strParam("Markdown：本次实际步骤、观察、对照、结论依据；无法确认则列出已检查内容和阻塞原因"),
+				"summary":  strParam("이번 재검증 결론 요약"),
+				"evidence": strParam("Markdown: 이번에 실제로 수행한 단계, 관찰, 비교, 결론의 근거. 확인 불가라면 확인한 내용과 장애 요인을 적으세요"),
 			}, "verdict", "summary", "evidence"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 				var a struct {
 					Verdict  string `json:"verdict"`
@@ -223,17 +223,24 @@ func (s *Server) seedFindingRetester() error {
 	if _, err = tx.Exec(`SELECT pg_advisory_xact_lock(7337741010)`); err != nil {
 		return err
 	}
+	// Rename only the untouched Chinese seed; keep any user-edited label.
+	if _, err = tx.Exec(`UPDATE agents SET name='취약점 재검증' WHERE key=$1 AND name='漏洞复测'`, db.FindingRetestAgentKey); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE agents SET description='취약점 상세에서 수동으로 시작해 원본 증거를 읽고 독립적인 재검증 결과를 저장합니다.' WHERE key=$1 AND description='从漏洞详情手动启动，读取原证据并保存独立复测结论。'`, db.FindingRetestAgentKey); err != nil {
+		return err
+	}
 	var done string
 	err = tx.QueryRow(`SELECT value FROM settings WHERE key=$1`, flag).Scan(&done)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if done == "true" {
-		return nil
+		return tx.Commit()
 	}
 	var id int64
 	err = tx.QueryRow(`INSERT INTO agents(key,name,description,role,builtin,enabled)
-	VALUES ($1,'漏洞复测','从漏洞详情手动启动，读取原证据并保存独立复测结论。','assistant',false,true)
+	VALUES ($1,'취약점 재검증','취약점 상세에서 수동으로 시작해 원본 증거를 읽고 독립적인 재검증 결과를 저장합니다.','assistant',false,true)
 	ON CONFLICT (key) DO NOTHING RETURNING id`, db.FindingRetestAgentKey).Scan(&id)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -241,7 +248,7 @@ func (s *Server) seedFindingRetester() error {
 	if id > 0 {
 		var pid int64
 		if err = tx.QueryRow(`INSERT INTO agent_prompts(agent_id,version,template_text,note,updated_by)
-		VALUES ($1,1,$2,'内置默认','system') RETURNING id`, id, agent.RetesterDefaultPrompt).Scan(&pid); err != nil {
+		VALUES ($1,1,$2,'기본 제공','system') RETURNING id`, id, agent.RetesterDefaultPrompt).Scan(&pid); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(`UPDATE agents SET current_prompt_id=$1 WHERE id=$2`, pid, id); err != nil {

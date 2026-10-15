@@ -25,8 +25,12 @@ func TestLocalModelGoalFlow(t *testing.T) {
 	if os.Getenv("ARTEX_PG_DSN") == "" {
 		t.Fatal("ARTEX_PG_DSN must point to an isolated test database")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
+	modelID := os.Getenv("ARTEX_LOCAL_MODEL_ID")
+	if modelID == "" {
+		modelID = "qwen/qwen3-8b"
+	}
 	m, err := NewManager(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -47,8 +51,8 @@ func TestLocalModelGoalFlow(t *testing.T) {
 	}))
 	defer fixture.Close()
 	profileID, err := m.pg.SaveProfile(&db.LLMProfile{
-		Name: "Local Qwen lab", Format: "openai", BaseURL: "http://127.0.0.1:1234/v1",
-		Model: "qwen/qwen3-8b", APIKey: "lm-studio", Streaming: true, MaxTokens: 4096,
+		Name: "Local model lab", Format: "openai", BaseURL: "http://127.0.0.1:1234/v1",
+		Model: modelID, APIKey: "lm-studio", Streaming: true, MaxTokens: 4096,
 	})
 	if err != nil {
 		t.Fatal(err)

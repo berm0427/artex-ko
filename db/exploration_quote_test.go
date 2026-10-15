@@ -64,3 +64,44 @@ func TestSuccessfulToolQuoteMatchesDecodedHTTPBody(t *testing.T) {
 		t.Fatalf("altered owner accepted: %d %v", got, err)
 	}
 }
+
+func TestSuccessfulMainToolQuoteRequiresSuccessfulMainOutput(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	defer d.Close()
+	expID, err := d.CreateExploration("main quote", "main quote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Exec(`DELETE FROM explorations WHERE id=$1`, expID)
+	s := d.Exploration(expID)
+	quote := "uid=1000(out_of_bound) gid=1000(out_of_bound)"
+	goodID, err := s.AppendActivity(Activity{Worker: "mainagent", Kind: "tool_result", Tool: "Bash", Detail: quote})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []Activity{
+		{Worker: "mainagent", Kind: "tool_result", Tool: "Bash", IsError: true, Detail: "FAILED-MAIN-RESULT-MARKER"},
+		{Worker: "planner", Kind: "tool_result", Tool: "Bash", Detail: "PLANNER-RESULT-MARKER"},
+	} {
+		if _, err := s.AppendActivity(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		quote string
+		want  int64
+	}{
+		{quote, goodID},
+		{"FAILED-MAIN-RESULT-MARKER", 0},
+		{"PLANNER-RESULT-MARKER", 0},
+		{"invented remote response", 0},
+	} {
+		got, err := s.SuccessfulMainToolQuote(tc.quote)
+		if err != nil || got != tc.want {
+			t.Fatalf("quote %q: got %d, want %d, err=%v", tc.quote, got, tc.want, err)
+		}
+	}
+}

@@ -72,7 +72,7 @@ func (s *Server) seedFindingWorkflowTools() {
 		props := objectProperty(schema, "properties")
 		if key == "report_finding" {
 			if _, exists := props["evidence_hint_id"]; !exists {
-				props["evidence_hint_id"] = map[string]any{"type": "integer", "description": "可选：本任务中对应此漏洞的 hint ID；读取该提示保存的 traffic_refs 一并绑定，无提示时省略"}
+				props["evidence_hint_id"] = map[string]any{"type": "integer", "description": "선택: 현재 작업에서 이 취약점에 해당하는 힌트 ID. 힌트에 저장된 traffic_refs를 함께 연결합니다. 힌트가 없으면 생략하세요"}
 			}
 		} else {
 			if _, exists := props["traffic_refs"]; !exists {
@@ -87,7 +87,7 @@ func (s *Server) seedFindingWorkflowTools() {
 				items["type"] = "object"
 			}
 			itemProps := objectProperty(items, "properties")
-			for name, value := range map[string]any{"text": strParam("提示内容"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}}, "traffic_refs": agent.HintTrafficSchema()} {
+			for name, value := range map[string]any{"text": strParam("힌트 내용"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}}, "traffic_refs": agent.HintTrafficSchema()} {
 				if _, exists := itemProps[name]; !exists {
 					itemProps[name] = value
 				}
@@ -135,37 +135,37 @@ func objectProperty(parent map[string]any, key string) map[string]any {
 
 func (s *Server) agentFindingTrafficAccess(ctx context.Context, id int64, write bool) error {
 	if id <= 0 {
-		return errors.New("finding_id 必须为独立漏洞记录 ID；不是探索节点 ID")
+		return errors.New("finding_id는 독립된 취약점 기록 ID여야 하며 탐색 노드 ID가 아닙니다")
 	}
 	f, err := s.m.pg.GetFinding(id)
 	if err != nil {
 		return err
 	}
 	if f == nil {
-		return fmt.Errorf("%w：finding_id=%d。证据工具使用独立漏洞记录 ID，请从 list_task_findings / get_task_node_detail 的 finding_id 字段读取；不要传 id / finding_node_id", db.ErrFindingNotFound, id)
+		return fmt.Errorf("%w: finding_id=%d. 증거 도구에는 독립된 취약점 기록 ID를 사용하세요. list_task_findings 또는 get_task_node_detail의 finding_id 필드에서 확인하고 id/finding_node_id는 전달하지 마세요", db.ErrFindingNotFound, id)
 	}
 	if ri := agent.RunInfoFrom(ctx); ri.TaskID > 0 {
 		task := s.m.ResolveTask(strconv.FormatInt(ri.TaskID, 10))
 		if task == nil {
-			return errors.New("任务不存在")
+			return errors.New("작업이 존재하지 않습니다")
 		}
 		_, inherited, allowed := findingProvenanceInTask(task, f.TaskID)
 		if !allowed {
-			return errors.New("当前任务不可读取该漏洞")
+			return errors.New("현재 작업에서 이 취약점을 읽을 수 없습니다")
 		}
 		if write && inherited {
-			return errors.New("继承漏洞的流量证据只读，请到来源任务修改")
+			return errors.New("상속된 취약점의 트래픽 증거는 읽기 전용입니다. 원본 작업에서 수정하세요")
 		}
 	}
 	return nil
 }
 
 func (s *Server) toolBindFindingTraffic() actool.CoreTool {
-	return wrTool("bind_finding_traffic", "为已登记漏洞补绑经核实的真实 HTTP 流量。finding_id 使用独立漏洞记录 ID；不要传探索节点 ID。同批引用全部成功或全部失败，重复引用不覆盖已有说明。补绑会使已有报告标记待更新；不要为补包重新探测或重复创建漏洞。",
-		objSchema(map[string]any{"finding_id": strParam("独立漏洞记录 ID，从 list_task_findings / get_task_node_detail 的 finding_id 字段读取"), "traffic_refs": agent.HintTrafficSchema()}, "finding_id", "traffic_refs"),
+	return wrTool("bind_finding_traffic", "등록된 취약점에 확인된 실제 HTTP 트래픽을 추가 연결합니다. finding_id에는 독립된 취약점 기록 ID를 사용하고 탐색 노드 ID는 사용하지 마세요. 같은 묶음의 참조는 모두 성공하거나 모두 실패합니다. 중복 참조는 기존 설명을 덮어쓰지 않습니다. 추가 연결하면 기존 보고서는 갱신 대기로 표시됩니다. 이를 위해 대상을 다시 탐색하거나 취약점을 중복 생성하지 마세요.",
+		objSchema(map[string]any{"finding_id": strParam("독립된 취약점 기록 ID. list_task_findings/get_task_node_detail의 finding_id 필드에서 확인"), "traffic_refs": agent.HintTrafficSchema()}, "finding_id", "traffic_refs"),
 		func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 			if !s.m.pg.GetBool(settingAgentTrafficBinding, false) {
-				return actool.Errorf("Agent 自动绑定流量已关闭；请在系统设置开启，或使用页面人工绑定。"), nil
+				return actool.Errorf("에이전트의 자동 트래픽 연결이 꺼져 있습니다. 시스템 설정에서 켜거나 화면에서 수동으로 연결하세요"), nil
 			}
 			var args struct {
 				FindingID json.RawMessage `json:"finding_id"`
@@ -179,7 +179,7 @@ func (s *Server) toolBindFindingTraffic() actool.CoreTool {
 				return actool.Errorf(err.Error()), nil
 			}
 			if len(args.Refs) == 0 {
-				return actool.Errorf("补绑需要至少一条已核实的 traffic_refs；无流量无需调用此工具"), nil
+				return actool.Errorf("추가 연결에는 확인된 traffic_refs가 하나 이상 필요합니다. 트래픽이 없다면 이 도구를 호출하지 마세요"), nil
 			}
 			list, err := s.evidenceStore().Bind(ctx, id, args.Refs)
 			if err != nil {

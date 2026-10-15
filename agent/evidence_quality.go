@@ -58,6 +58,52 @@ func deniedAccessEvidence(quote string) bool {
 	)
 }
 
+// An echo or a next-stage prompt only shows that the service accepted input.
+// It does not prove that a claimed memory-corruption or other vulnerability
+// was triggered. This is deliberately narrow; raw outputs with additional
+// anomalous bytes are left for normal evidence review.
+func trivialProtocolPromptOnly(quote string) bool {
+	trimmed := strings.TrimSpace(quote)
+	lower := strings.ToLower(trimmed)
+	lines := strings.Split(strings.ReplaceAll(lower, "\r", ""), "\n")
+	if len(lines) > 1 {
+		ordinary := true
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || line == "'" || isNumberedProtocolPrompt(line) {
+				continue
+			}
+			if strings.HasPrefix(line, "your input is '") && len(line) < 64 {
+				continue
+			}
+			if line == "input:" || line == "choice:" || line == "select:" || line == "option:" {
+				continue
+			}
+			ordinary = false
+			break
+		}
+		if ordinary {
+			return true
+		}
+	}
+	if strings.HasPrefix(lower, "your input is '") && !strings.ContainsAny(trimmed, "\r\n") && len(trimmed) < 64 {
+		return true
+	}
+	for _, prefix := range []string{"input:", "choice:", "select:", "option:"} {
+		if strings.HasPrefix(lower, prefix) && !strings.ContainsAny(trimmed, "\r\n") {
+			return true
+		}
+	}
+	if isNumberedProtocolPrompt(lower) && !strings.ContainsAny(trimmed, "\r\n") {
+		return true
+	}
+	return false
+}
+
+func isNumberedProtocolPrompt(line string) bool {
+	return strings.HasPrefix(line, "[") && len(line) > 3 && line[1] >= '0' && line[1] <= '9' && strings.Contains(line, "] ")
+}
+
 func containsAny(s string, parts ...string) bool {
 	for _, part := range parts {
 		if strings.Contains(s, part) {

@@ -11,8 +11,8 @@ import (
 	"github.com/google/uuid"
 )
 
-var ErrSideBusy = errors.New("当前会话已有旁路问题正在回答")
-var ErrSideParentGone = errors.New("旁路父会话已删除或归档")
+var ErrSideBusy = errors.New("현재 세션에서 이미 별도 질문에 답변 중입니다")
+var ErrSideParentGone = errors.New("별도 질문의 상위 세션이 삭제되거나 보관되었습니다")
 
 // Lock the real parent before the side session, also covering soft task/intent
 // deletion. A delayed checkpoint cannot recreate data after archive cleanup.
@@ -173,7 +173,7 @@ func (d *DB) StartSideRequest(ctx context.Context, s sidequestion.Snapshot, clie
 	e, err := scanSide(tx.QueryRowContext(ctx, `SELECT `+sideCols+` FROM side_question_requests WHERE session_key=$1 AND generation=$2 AND client_id=$3`, s.Parent.Key(), generation, clientID))
 	if err == nil {
 		if e.Question != question {
-			return nil, false, fmt.Errorf("同一请求 ID 不能用于不同问题")
+			return nil, false, fmt.Errorf("동일한 요청 ID를 서로 다른 질문에 사용할 수 없습니다")
 		}
 		return &e, false, tx.Commit()
 	}

@@ -19,6 +19,16 @@ func TestParseVerdict(t *testing.T) {
 	}
 }
 
+func TestParseVerdictKoreanExplanation(t *testing.T) {
+	for _, action := range []string{"allow", "ask", "deny"} {
+		reason := "실제 작업: 검증 보고서 작성; 성공 시 결과: 보고서 저장; 적용 규칙: A2"
+		raw, _ := json.Marshal(map[string]string{"decision": action, "comment": reason})
+		if got := ParseVerdict(string(raw)); got.Action != action || got.Reason != reason {
+			t.Fatalf("한국어 판정 설명이 유실됨: %+v", got)
+		}
+	}
+}
+
 func TestParseVerdictRejectsIncompleteOrAmbiguousReplies(t *testing.T) {
 	valid := `{"decision":"allow","comment":"实际操作：读取文件；成功后的后果：返回内容；命中规则：A5"}`
 	for _, reply := range []string{

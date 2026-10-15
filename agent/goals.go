@@ -121,9 +121,9 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 	if withScope {
 		tools = append(tools, tsx.addTaskScope())
 	}
-	userMsg := "任务目标：\n" + goalText
+	userMsg := "작업 목표:\n" + goalText
 	if d := strings.TrimSpace(desc); d != "" {
-		userMsg += "\n\n任务描述（背景信息，可能含靶标范围/flag 数量/交战说明；仅供参考，不要臆造其中未提及的内容）：\n" + d
+		userMsg += "\n\n작업 설명(대상 범위, flag 수, 교전 지침 등 배경 정보일 수 있음. 참고하되 명시되지 않은 내용은 지어내지 마세요):\n" + d
 	}
 	// Use captureRun so every LLM step is emitted as an activity record (visible in
 	// the plan tab under the round-0 marker). Falls back gracefully when emit is nil.

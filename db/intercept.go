@@ -248,7 +248,7 @@ func interceptSource(ruleID int64, reason string) string {
 	if ruleID != 0 {
 		return "rule"
 	}
-	if strings.HasPrefix(reason, "[模型]") {
+	if strings.HasPrefix(reason, "[모델]") || strings.HasPrefix(reason, "[模型]") {
 		return "model"
 	}
 	return "unknown"

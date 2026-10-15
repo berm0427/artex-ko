@@ -86,6 +86,10 @@ if (-not $NoLoad) {
         [int]$loaded[0].parallel -ne $Parallel
     if ($needsReload) {
         Write-Step "모델 로드: $Model (context ${ContextWindowK}K, parallel $Parallel)"
+        if ($loaded.Count -gt 0) {
+            & $lmsExe unload $Model
+            if ($LASTEXITCODE -ne 0) { throw "LM Studio 기존 모델 언로드 실패: $Model" }
+        }
         & $lmsExe load $Model --gpu max --context-length ($ContextWindowK * 1024) `
             --parallel $Parallel --identifier $Model --yes
         if ($LASTEXITCODE -ne 0) { throw "LM Studio 모델 로드 실패: $Model" }
@@ -109,6 +113,13 @@ $postgresRoot = Get-ChildItem -LiteralPath (Join-Path $repoRoot '.runtime') -Dir
     Where-Object Name -Like 'postgresql-*' | Sort-Object Name -Descending | Select-Object -First 1
 $psql = $PsqlPath
 if (-not $psql -and $postgresRoot) { $psql = Join-Path $postgresRoot.FullName 'pgsql\bin\psql.exe' }
+if (-not $psql -or -not (Test-Path -LiteralPath $psql)) {
+    $toolsDir = Join-Path ([IO.Path]::GetFullPath((Join-Path $repoRoot '..\..'))) 'tools'
+    $bundledPsql = Get-ChildItem -LiteralPath $toolsDir -Directory -Filter 'postgresql-*' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'pgsql\bin\psql.exe' } |
+        Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($bundledPsql) { $psql = $bundledPsql }
+}
 if (-not $psql -or -not (Test-Path -LiteralPath $psql)) {
     $psqlCommand = Get-Command psql -ErrorAction SilentlyContinue
     if (-not $psqlCommand) { throw 'psql.exe를 찾지 못했습니다. 먼저 install-windows.ps1을 실행하세요.' }

@@ -285,7 +285,7 @@ func (s *ExplorationStore) UpdateGoalPayload(id int64, text, vulnclass string) e
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("目标不存在")
+		return fmt.Errorf("목표가 존재하지 않습니다")
 	}
 	return nil
 }
@@ -300,7 +300,7 @@ func (s *ExplorationStore) DeleteGoal(id int64) error {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("目标不存在")
+		return fmt.Errorf("목표가 존재하지 않습니다")
 	}
 	return nil
 }
@@ -562,7 +562,7 @@ func (s *ExplorationStore) CancelIntent(id int64) (IntentCleanup, error) {
 				exploration_id, worker, kind, summary, metadata,
 				input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at)
 				VALUES ($1,'token-ledger','result',$2,$3,$4,$5,$6,$7,$8)`,
-				s.expID, fmt.Sprintf("已取消意图 #%d 的 Token 计量", iid), metadata,
+				s.expID, fmt.Sprintf("취소된 의도 #%d의 토큰 사용량", iid), metadata,
 				bucket.Usage.InputTokens, bucket.Usage.OutputTokens,
 				bucket.Usage.CacheReadTokens, bucket.Usage.CacheWriteTokens, bucket.Day); err != nil {
 				return out, err
@@ -2048,6 +2048,26 @@ ORDER BY id DESC LIMIT 100`, s.expID, intentID)
 			}
 		}
 		return 0, rows.Err()
+	}
+	return id, err
+}
+
+// SuccessfulMainToolQuote accepts only a verbatim excerpt from a successful
+// main-agent tool result in this exploration. Main-agent steps have no intent
+// node, so SuccessfulToolQuote cannot see them.
+func (s *ExplorationStore) SuccessfulMainToolQuote(quote string) (int64, error) {
+	quote = strings.TrimSpace(quote)
+	if len([]rune(quote)) < 16 {
+		return 0, nil
+	}
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM activity
+WHERE exploration_id=$1 AND node_id IS NULL AND worker='mainagent'
+  AND kind='tool_result' AND is_error=false
+  AND strpos(COALESCE(detail,''), $2)>0
+ORDER BY id DESC LIMIT 1`, s.expID, quote).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
 	}
 	return id, err
 }

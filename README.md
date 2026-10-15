@@ -118,6 +118,23 @@ docker compose up -d          # artex 이미지 + postgres 를 함께 기동
 
 #### Windows 사용자 범위 설치
 
+새 PC에서 이 저장소만 내려받아 설치할 수 있습니다. 다만 Go, PostgreSQL,
+Node.js, REA, Ghidra 같은 외부 프로그램의 실행 파일이나 모델 가중치를 Git에
+복제해 넣지는 않습니다. 아래 설치 스크립트가 Go/PostgreSQL을 공식 배포처에서
+받고 프런트엔드를 빌드합니다. REA/Ghidra는 아래 별도 단계가 필요합니다.
+
+```powershell
+git clone https://github.com/berm0427/artex-ko.git
+cd artex-ko
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install-windows.ps1 -NoStart -SkipLMStudio
+.\START-ARTEX-KO.cmd
+```
+
+처음 열리는 `/setup`에서 관리자 계정을 만들고, 시스템 → LLM에서 사용할
+모델/API를 등록하세요. 기존 PC의 `config.json`, `.runtime`, DB, API 키,
+작업 기록은 Git에 포함되지 않으므로 새 설치로 자동 이전되지 않습니다.
+
 이 포크는 **관리자 권한과 Docker 없이**, Windows 사용자 권한만으로 한국어판을
 빌드하고 실행하는 경로를 실제로 검증했습니다. Windows 11 x64, Node.js 24/npm 11
 환경에서 Go 1.27.1과 PostgreSQL 17.11의 공식 Windows ZIP을 사용했습니다.
@@ -186,6 +203,31 @@ ARTEX 설치 후에만 로컬 LLM을 연결하거나 설정을 다시 맞추려�
 설치된 첫 번째 LLM을 선택합니다. 모델 파일 자체는 크고 하드웨어 요구량이 다르므로
 자동 다운로드하지 않습니다. LM Studio에 설치된 LLM이 하나도 없으면 안내와 함께
 자동 연결만 건너뜁니다.
+
+#### REA 역공학 도구 연결 (Windows + WSL)
+
+이 저장소에는 ARTEX↔REA MCP 브리지와 등록 스크립트가 포함됩니다. REA의
+코드/바이너리와 Ghidra는 각 원저작자의 배포물로 별도 설치하며, 로컬 ELF
+분석에는 WSL 안의 Ghidra가 필요합니다. [REA 공식 설치 안내](https://github.com/morluto/rea)
+및 [Ghidra 공식 배포](https://github.com/NationalSecurityAgency/ghidra/releases)를 확인하세요.
+WSL 배포판(예: Ubuntu)을 설치한 뒤 그 안에 Node.js(`/usr/bin/node`), Java,
+REA(`npm install -g rea-agents@6.4.0`)와 Ghidra를 설치합니다. REA의 일반
+설정 명령은 `npx rea-agents setup`이지만, ARTEX에는 아래 스크립트로 등록합니다.
+
+```powershell
+# WSL 내부 Ghidra 디렉터리만 자신의 설치 위치로 바꾸세요.
+.\scripts\configure-rea-wsl.ps1 -Distro Ubuntu `
+  -GhidraDir /opt/ghidra_12.1.4_PUBLIC
+```
+
+스크립트는 WSL의 REA 엔트리를 자동 검색하고, 브리지 경로 변환과 MCP 도구
+검색을 테스트한 다음 ARTEX DB에 `rea`를 멱등 등록하고 `worker`에 노출합니다.
+설치 위치가 다르면 `-ReaEntry /절대/경로/rea.mjs`를 추가하세요. 이후
+시스템 → MCP → `rea`에서 **도구 새로고침**을 눌러 검색된 도구가 표시되는지
+확인하세요. 바이너리 분석은 도구가 보이는 것과 별개로 실제 파일로 확인해야
+하며, `binary_overview`가 실패하면 WSL의 Ghidra/Java 경로와 권한을 점검하세요.
+REA 브리지는 Windows 파일 절대 경로를 WSL `/mnt/<드라이브>/...`로 변환합니다.
+외부 바이너리, Ghidra 설치물, 사용자 경로와 DB 비밀번호는 커밋하지 않습니다.
 
 한국어 출력과 도구 호출을 함께 사용할 때는 LM Studio가 `trainedForToolUse: true`로
 인식하는 Qwen3 8B를 권장합니다. Q4_K_M 모델은 약 5GB이며 8GB급 VRAM에서도 16K
