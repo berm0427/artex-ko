@@ -36,15 +36,15 @@ if (process.argv[2] === '--self-test') {
   }
   process.stdout.write('bridge path conversion OK\n');
 } else {
-  const [distro, entry, ghidraDir] = process.argv.slice(2);
-  if (!distro || !entry?.startsWith('/') || !ghidraDir?.startsWith('/')) {
-    process.stderr.write('Usage: node rea-wsl-mcp-bridge.mjs <distro> <Linux rea.mjs> <Linux Ghidra directory>\n');
+  const [distro, entry, ghidraDir, linuxNode = '/usr/bin/node'] = process.argv.slice(2);
+  if (!distro || !entry?.startsWith('/') || !ghidraDir?.startsWith('/') || !linuxNode.startsWith('/')) {
+    process.stderr.write('Usage: node rea-wsl-mcp-bridge.mjs <distro> <Linux rea.mjs> <Linux Ghidra directory> [Linux node]\n');
     process.exitCode = 2;
   } else {
     const child = spawn('wsl.exe', [
       '-d', distro, '--cd', '/', '--', 'env',
       `GHIDRA_INSTALL_DIR=${ghidraDir}`, 'REA_ANALYSIS_PROVIDER=ghidra',
-      '/usr/bin/node', entry, 'mcp',
+      linuxNode, entry, 'mcp',
     ], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
     child.stdout.pipe(process.stdout);
     child.on('error', (err) => { process.stderr.write(`${err.message}\n`); process.exitCode = 1; });

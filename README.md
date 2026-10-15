@@ -121,7 +121,7 @@ docker compose up -d          # artex 이미지 + postgres 를 함께 기동
 새 PC에서 이 저장소만 내려받아 설치할 수 있습니다. 다만 Go, PostgreSQL,
 Node.js, REA, Ghidra 같은 외부 프로그램의 실행 파일이나 모델 가중치를 Git에
 복제해 넣지는 않습니다. 아래 설치 스크립트가 Go/PostgreSQL을 공식 배포처에서
-받고 프런트엔드를 빌드합니다. REA/Ghidra는 아래 별도 단계가 필요합니다.
+받고 프런트엔드를 빌드합니다. REA/Ghidra/WSL도 아래 별도 스크립트로 설치할 수 있습니다.
 
 ```powershell
 git clone https://github.com/berm0427/artex-ko.git
@@ -206,23 +206,29 @@ ARTEX 설치 후에만 로컬 LLM을 연결하거나 설정을 다시 맞추려�
 
 #### REA 역공학 도구 연결 (Windows + WSL)
 
-이 저장소에는 ARTEX↔REA MCP 브리지와 등록 스크립트가 포함됩니다. REA의
-코드/바이너리와 Ghidra는 각 원저작자의 배포물로 별도 설치하며, 로컬 ELF
-분석에는 WSL 안의 Ghidra가 필요합니다. [REA 공식 설치 안내](https://github.com/morluto/rea)
-및 [Ghidra 공식 배포](https://github.com/NationalSecurityAgency/ghidra/releases)를 확인하세요.
-WSL 배포판(예: Ubuntu)을 설치한 뒤 그 안에 Node.js(`/usr/bin/node`), Java,
-REA(`npm install -g rea-agents@6.4.0`)와 Ghidra를 설치합니다. REA의 일반
-설정 명령은 `npx rea-agents setup`이지만, ARTEX에는 아래 스크립트로 등록합니다.
+이 저장소에는 ARTEX↔REA MCP 브리지와 **다운로드·설치·등록 스크립트**가 포함됩니다.
+로컬 ELF 분석에는 WSL Ubuntu 안의 Ghidra가 필요합니다. ARTEX 설치와 첫 실행
+(DB 스키마 생성) 뒤 PowerShell에서 다음을 실행하세요.
 
 ```powershell
-# WSL 내부 Ghidra 디렉터리만 자신의 설치 위치로 바꾸세요.
-.\scripts\configure-rea-wsl.ps1 -Distro Ubuntu `
-  -GhidraDir /opt/ghidra_12.1.4_PUBLIC
+.\scripts\install-rea-wsl.ps1 -Distro Ubuntu
 ```
 
-스크립트는 WSL의 REA 엔트리를 자동 검색하고, 브리지 경로 변환과 MCP 도구
-검색을 테스트한 다음 ARTEX DB에 `rea`를 멱등 등록하고 `worker`에 노출합니다.
-설치 위치가 다르면 `-ReaEntry /절대/경로/rea.mjs`를 추가하세요. 이후
+WSL이 없다면 **관리자 PowerShell**에서 같은 명령을 실행하면 `wsl --install -d Ubuntu`를
+요청합니다. 이 단계에는 Windows 재시작이 필요할 수 있고, Ubuntu를 처음 열어
+Linux 계정과 암호를 만드는 과정은 직접 완료해야 합니다. 이후 **일반 PowerShell**에서
+명령을 다시 실행하세요. Ubuntu 패키지 설치 시 `sudo` 암호 입력이 필요합니다.
+스크립트는 Java 21과 유틸리티를 Ubuntu 패키지로 설치하고, 공식 Node.js 22 배포물은
+SHA-256 목록으로, Ghidra 12.1.4 ZIP은 고정 SHA-256으로 검증하여 WSL 사용자 홈에
+설치합니다. REA `rea-agents@6.4.0`은 npm으로 받습니다. 기존 설치는 재사용합니다.
+마지막으로 브리지 경로 변환과 MCP 도구 검색을 검사한 뒤 ARTEX DB에 `rea`를
+멱등 등록하고 `worker`에 노출합니다. 인터넷 연결과 충분한 디스크 공간이 필요합니다.
+배포처: [REA](https://github.com/morluto/rea), [Node.js](https://nodejs.org/en/download),
+[Ghidra](https://github.com/NationalSecurityAgency/ghidra/releases),
+[WSL](https://learn.microsoft.com/windows/wsl/install).
+
+수동 설치를 선호하면 `configure-rea-wsl.ps1 -GhidraDir /절대/경로`를 사용할 수
+있으며 `-ReaEntry`, `-LinuxNode`로 다른 설치 경로를 지정할 수 있습니다. 이후
 시스템 → MCP → `rea`에서 **도구 새로고침**을 눌러 검색된 도구가 표시되는지
 확인하세요. 바이너리 분석은 도구가 보이는 것과 별개로 실제 파일로 확인해야
 하며, `binary_overview`가 실패하면 WSL의 Ghidra/Java 경로와 권한을 점검하세요.

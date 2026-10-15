@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)] [string]$GhidraDir,
     [string]$Distro = 'Ubuntu',
     [string]$ReaEntry = '',
+    [string]$LinuxNode = '/usr/bin/node',
     [string]$PsqlPath = '',
     [switch]$SkipDiscoveryTest
 )
@@ -18,13 +19,13 @@ $node = (Get-Command node -ErrorAction Stop).Source
 if (-not (Test-Path -LiteralPath $configPath)) {
     throw 'config.json이 없습니다. install-windows.ps1을 먼저 실행하세요.'
 }
-if (-not $GhidraDir.StartsWith('/') -or ($ReaEntry -and -not $ReaEntry.StartsWith('/'))) {
-    throw 'GhidraDir와 ReaEntry는 WSL 절대 경로여야 합니다.'
+if (-not $GhidraDir.StartsWith('/') -or ($ReaEntry -and -not $ReaEntry.StartsWith('/')) -or -not $LinuxNode.StartsWith('/')) {
+    throw 'GhidraDir, ReaEntry, LinuxNode는 WSL 절대 경로여야 합니다.'
 }
 & wsl.exe -d $Distro -- true
 if ($LASTEXITCODE -ne 0) { throw "WSL 배포판을 실행하지 못했습니다: $Distro" }
-& wsl.exe -d $Distro -- test -x /usr/bin/node
-if ($LASTEXITCODE -ne 0) { throw 'WSL의 /usr/bin/node가 없습니다. WSL 안에 Node.js를 설치하세요.' }
+& wsl.exe -d $Distro -- test -x $LinuxNode
+if ($LASTEXITCODE -ne 0) { throw "WSL의 Node.js가 없습니다: $LinuxNode" }
 if (-not $ReaEntry) {
     $npmRoot = (& wsl.exe -d $Distro -- npm root -g | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $npmRoot.StartsWith('/')) {
@@ -52,6 +53,7 @@ if (-not $SkipDiscoveryTest) {
     $env:REA_MCP_LAUNCHER = $bridge
     $env:REA_MCP_WSL_DISTRO = $Distro
     $env:REA_MCP_WSL_GHIDRA_DIR = $GhidraDir
+    $env:REA_MCP_LINUX_NODE = $LinuxNode
     try {
         Push-Location $repoRoot
         try {
@@ -59,7 +61,7 @@ if (-not $SkipDiscoveryTest) {
         } finally { Pop-Location }
         if ($LASTEXITCODE -ne 0) { throw 'REA MCP 도구 검색 테스트 실패' }
     } finally {
-        'REA_MCP_NODE','REA_MCP_ENTRY','REA_MCP_LAUNCHER','REA_MCP_WSL_DISTRO','REA_MCP_WSL_GHIDRA_DIR' |
+        'REA_MCP_NODE','REA_MCP_ENTRY','REA_MCP_LAUNCHER','REA_MCP_WSL_DISTRO','REA_MCP_WSL_GHIDRA_DIR','REA_MCP_LINUX_NODE' |
             ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
     }
 }
@@ -80,7 +82,7 @@ if (-not $psql -or -not (Test-Path -LiteralPath $psql)) {
     if (-not $psqlCommand) { throw 'psql.exe가 없습니다. install-windows.ps1을 먼저 실행하세요.' }
     $psql = $psqlCommand.Source
 }
-$argsJson = @($bridge, $Distro, $ReaEntry, $GhidraDir) | ConvertTo-Json -Compress
+$argsJson = @($bridge, $Distro, $ReaEntry, $GhidraDir, $LinuxNode) | ConvertTo-Json -Compress
 $sql = @'
 WITH server_row AS (
     INSERT INTO mcp_servers(name, transport, command, args, env, enabled)

@@ -23,7 +23,11 @@ func TestREAStdioDiscoveryIntegration(t *testing.T) {
 	defer cancel()
 	args := []string{launcher, entry}
 	if distro, ghidraDir := os.Getenv("REA_MCP_WSL_DISTRO"), os.Getenv("REA_MCP_WSL_GHIDRA_DIR"); distro != "" && ghidraDir != "" {
-		args = []string{launcher, distro, entry, ghidraDir}
+		linuxNode := os.Getenv("REA_MCP_LINUX_NODE")
+		if linuxNode == "" {
+			linuxNode = "/usr/bin/node"
+		}
+		args = []string{launcher, distro, entry, ghidraDir, linuxNode}
 	}
 	client, err := mcp.NewStdioClient(ctx, "rea", node, nil, args...)
 	if err != nil {
