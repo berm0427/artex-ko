@@ -23,11 +23,31 @@ go build -o "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" ./cmd/chatgpt-plan
 & "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" verify
 ```
 
-다음 명령으로 별도 터미널에서 로컬 브리지를 켭니다. ARTEX가 실행 중이어도 설정 전까지 기존 작업에는 영향이 없습니다.
+다음 명령으로 별도 터미널에서 로컬 브리지를 켭니다. ARTEX가 실행 중이어도 설정 전까지 기존 작업에는 영향이 없습니다. 이미 브리지가 실행 중이면 다시 실행할 필요가 없습니다.
 
 ```powershell
 & "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" serve
 ```
+
+### 실행 파일을 찾을 수 없다는 오류가 날 때
+
+PowerShell의 `CommandNotFoundException`과 함께 `chatgpt-plan-bridge.exe`를 찾을 수 없다고 나오면, 우선 **오류가 난 바로 그 PowerShell 창**에서 설치 경로를 확인하세요.
+
+```powershell
+$bridge = Join-Path $env:LOCALAPPDATA 'ARTEX\chatgpt-plan-bridge.exe'
+$bridge
+Test-Path -LiteralPath $bridge
+```
+
+`False`라면 해당 Windows 환경에 브리지가 아직 빌드되지 않은 것입니다. 저장소를 받은 뒤 설치 스크립트를 실행했더라도, 브리지가 추가되기 **전**에 설치했다면 다시 빌드해야 합니다. 저장소 루트에서 다음을 실행하세요.
+
+```powershell
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\ARTEX" | Out-Null
+go build -o "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" ./cmd/chatgpt-plan-bridge
+Test-Path -LiteralPath "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe"
+```
+
+`True`인데도 오류가 반복되면 `$env:LOCALAPPDATA`와 `Get-Item -LiteralPath $bridge`로 실제 경로를 비교하고, 같은 PC·같은 Windows 사용자 세션의 PowerShell에서 실행 중인지 확인하세요. 다른 PC나 WSL에서는 이 Windows 실행 파일이 자동으로 공유되지 않습니다. `status` 출력에는 로컬 브리지 키가 있으므로 문제 해결을 위해 공유할 때도 그대로 붙여 넣지 마세요.
 
 또 다른 터미널에서 `status`를 실행하면 현재 로그인 계정과 **로컬 브리지 키**가 표시됩니다. 이 키는 같은 PC에서 ARTEX만 브리지에 접근시키는 비밀값입니다. 화면 공유·로그·Git에 붙이지 마세요.
 
