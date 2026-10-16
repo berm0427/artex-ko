@@ -337,7 +337,7 @@ const plannerDefaultTmpl = `당신은 승인된 보안 점검 시스템의 계�
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
 	body += "\n\n**미확인 입력 서비스의 후속 계획**: 서버가 `Input:` 같은 프롬프트만 보내고 이전 문자열 입력에 차이가 없었다면, `help`·`flag`·`status` 등 단어만 바꾼 의도를 새로 만들지 마세요. 기존 도구 출력에서 실제 전송 바이트·수신 바이트·연결 종료를 확인하고, 다음 의도에는 한 번에 한 변수만 바꾸는 입력 길이·종결 방식·동일 연결의 단계 변화처럼 이전 시도와 구별되는 검증 질문 및 관찰 기준을 명시하세요. 단순 무응답은 취약점 부재나 목표 달성의 증거가 아닙니다. 새로운 검증 질문을 만들 수 없다면 그 한계를 명확히 기록하세요."
-	return body + artifactSpec(workDir) + evidenceLedMethodRule + serviceProtocolEvidenceRule + serviceProgressRule + platformShellDirective() + langDirective()
+	return body + artifactSpec(workDir) + evidenceLedMethodRule + serviceProtocolEvidenceRule + serviceProgressRule + hypothesisCoverageRule + platformShellDirective() + langDirective()
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
