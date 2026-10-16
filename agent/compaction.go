@@ -509,8 +509,9 @@ func buildCompressionInput(g *coldGraph, b block, nodeByID map[int64]*db.Node) s
 	return sb.String()
 }
 
-// compress runs the §4 body LLM call on one block. Uses the same model the agent
-// runs on; thinking disabled (a pure summarization step).
+// compress runs the §4 body LLM call on one block. Use the streaming provider
+// path even though the result is collected into one body: some providers (notably
+// ChatGPT plan bridges) reject non-streaming requests outright.
 func (c *Compactor) compress(ctx context.Context, g *coldGraph, b block, nodeByID map[int64]*db.Node) (string, error) {
 	req := llm.CompletionRequest{
 		System:    []string{compressionSystemPrompt},
@@ -518,11 +519,14 @@ func (c *Compactor) compress(ctx context.Context, g *coldGraph, b block, nodeByI
 		MaxTokens: 1500,
 		Thinking:  "disabled",
 	}
-	msg, _, _, err := c.prov.Complete(ctx, req)
-	if err != nil {
-		return "", err
+	acc := llm.NewAccumulator()
+	for ev, err := range c.prov.Stream(ctx, req) {
+		if err != nil {
+			return "", err
+		}
+		acc.Add(ev)
 	}
-	body := strings.TrimSpace(msg.Text())
+	body := strings.TrimSpace(acc.Message().Text())
 	if body == "" {
 		return "", fmt.Errorf("empty body from model")
 	}
