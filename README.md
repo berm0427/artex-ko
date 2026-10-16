@@ -82,46 +82,11 @@ ARTEX 는 **자신이 소유하거나 서면으로 명시적 허가를 받은 �
 
 ---
 
-## 빠른 시작 (Docker Compose)
+## Windows 설치
 
-> **사전 요구:** Docker 와 Docker Compose. 데이터베이스는 **PostgreSQL** 이며 compose 가 함께 띄웁니다. 탐색에는 **LLM** 이 필요합니다(`ANTHROPIC_API_KEY` 또는 `OPENAI_API_KEY`, UI 에서도 설정 가능).
+Windows 11 x64에서 검증한 설치 방법입니다. **Git과 Node.js/npm**을 먼저 설치하세요. Go와 PostgreSQL은 아래 스크립트가 공식 배포 파일을 내려받아 사용자 폴더에 설치합니다. 관리자 권한과 Docker는 필요하지 않습니다.
 
-> **⚠️ 지금 이 compose 가 내려받는 이미지는 상류(원본) 중국어 빌드입니다.** `docker-compose.yml` 의 `artex` 서비스는 원작자가 Docker Hub 에 올린 `autumn27/artex` 이미지를 받습니다. 이 이미지는 **중국어 UI 와 중국어 출력**이라서, 이 저장소가 더한 한국어화(한국어 UI·한국어 리포트·`langDirective`)는 **아직 담겨 있지 않습니다**. 한국어판 화면과 출력을 확인하려면 지금은 아래 ["그 밖의 설치 방법"](#그-밖의-설치-방법)에 있는 **소스에서 단일 바이너리 컴파일** 경로로 직접 빌드하십시오. 한국어판 Docker 이미지의 배포는 준비 중입니다.
-
-```bash
-git clone https://github.com/jiwoochris/artex-ko.git
-cd artex-ko
-cp .env.example .env          # POSTGRES_PASSWORD 설정, ANTHROPIC_API_KEY 는 선택
-docker compose up -d          # artex 이미지 + postgres 를 함께 기동
-# → http://localhost:8787 접속 (처음 들어가면 /setup 에서 관리자 비밀번호 설정)
-```
-
-위 상류 이미지에는 자주 쓰는 도구(ripgrep·curl·vim·npm·nmap 등)가 들어 있습니다. `./skills` 와 `./data` 는 바인드 마운트로 호스트에 남아 컨테이너를 다시 만들어도 보존됩니다.
-
-### 그 밖의 설치 방법
-
-원본 저장소는 설치 스크립트(`./install.sh`), 사전 컴파일 바이너리(Releases), 소스 단일 바이너리 컴파일 등 여러 방법을 제공합니다. 명령과 절차는 [`README.zh.md`](README.zh.md#安装)의 "安装"(설치) 절에 정리되어 있으며, 아래 핵심만 옮깁니다.
-
-- **설치 스크립트:** `./install.sh` 를 실행하면 Docker 감지·설치 후 "① 전부 Docker" 또는 "② 로컬 컴파일 실행"을 고르게 합니다.
-- **소스에서 단일 바이너리 컴파일:**
-
-  ```bash
-  cd web && npm ci && npm run build:static && cd ..   # 1) 프런트엔드 정적 빌드
-  rm -rf server/webui/dist && mkdir -p server/webui/dist && cp -a web/out/. server/webui/dist/   # 2) 내장 디렉터리로 동기화(재빌드 시 중첩 방지)
-  CGO_ENABLED=0 go build -tags embedui -o artex ./cmd/artex   # 3) 프런트 내장 컴파일
-  ./start.sh                                          # → http://localhost:8787
-  ```
-
-> 1) 단계의 `npm ci` 는 빌드에 필요한 devDependencies(예: `@tailwindcss/postcss`)를 함께 설치합니다. 셸에 `NODE_ENV=production` 이 설정돼 있으면 `npm ci` 가 devDependencies 를 건너뛰어 빌드가 `Error: Cannot find module '@tailwindcss/postcss'` 로 실패하므로, 이때는 `npm ci --include=dev` 로 받으십시오.
-
-> 실행은 `./artex` 를 직접 돌리지 말고 `start.sh`(Windows 는 `start.bat`)로 하십시오. 이 스크립트는 종료 코드에 따라 프로그램을 다시 띄우는 감시자이고, UI 의 "원클릭 업데이트"도 이 스크립트가 처리합니다.
-
-#### Windows 사용자 범위 설치
-
-새 PC에서 이 저장소만 내려받아 설치할 수 있습니다. 다만 Go, PostgreSQL,
-Node.js, REA, Ghidra 같은 외부 프로그램의 실행 파일이나 모델 가중치를 Git에
-복제해 넣지는 않습니다. 아래 설치 스크립트가 Go/PostgreSQL을 공식 배포처에서
-받고 프런트엔드를 빌드합니다. REA/Ghidra/WSL도 아래 별도 스크립트로 설치할 수 있습니다.
+PowerShell에서 다음 순서대로 실행하세요.
 
 ```powershell
 git clone https://github.com/berm0427/artex-ko.git
@@ -131,163 +96,29 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\START-ARTEX-KO.cmd
 ```
 
-처음 열리는 `/setup`에서 관리자 계정을 만들고, 시스템 → LLM에서 사용할
-모델/API를 등록하세요. 기존 PC의 `config.json`, `.runtime`, DB, API 키,
-작업 기록은 Git에 포함되지 않으므로 새 설치로 자동 이전되지 않습니다.
+브라우저에서 `http://127.0.0.1:8787/setup`을 열어 관리자 계정을 만든 뒤 **시스템 → LLM**에서 사용할 모델을 설정합니다. 설치 스크립트는 한국어 UI가 내장된 `artex.exe`, 로컬 PostgreSQL, 시작용 CMD 파일을 만듭니다. 첫 설치에는 인터넷 연결과 빌드 시간이 필요합니다.
 
-이 포크는 **관리자 권한과 Docker 없이**, Windows 사용자 권한만으로 한국어판을
-빌드하고 실행하는 경로를 실제로 검증했습니다. Windows 11 x64, Node.js 24/npm 11
-환경에서 Go 1.27.1과 PostgreSQL 17.11의 공식 Windows ZIP을 사용했습니다.
-Node.js/npm과 Git만 미리 설치되어 있으면 됩니다.
+- **LM Studio를 이미 사용 중이라면:** 설치 명령에서 `-SkipLMStudio`를 빼면 로컬 모델 자동 연결을 시도합니다. 모델 파일은 자동 다운로드하지 않습니다. 나중에 연결하려면 `scripts/configure-lmstudio.ps1`을 사용하세요.
+- **ChatGPT Plus/Pro 구독을 연결하려면:** [구독 연동 안내](docs/ChatGPT-구독-연동.md)를 따라 브리지를 설치·로그인하고 ARTEX에 Responses 프로필을 등록하세요.
+- **REA 역공학 도구가 필요하면:** ARTEX를 한 번 실행한 뒤 `.\scripts\install-rea-wsl.ps1 -Distro Ubuntu`를 실행하세요. WSL/Ubuntu 최초 설치에는 관리자 권한, 재부팅 및 Linux 계정 설정이 필요할 수 있습니다. 설치 후 **시스템 → MCP**에서 `rea` 도구를 확인하세요.
 
-아래 스크립트는 우리가 검증한 절차를 그대로 자동화합니다. 공식 배포 파일의
-SHA-256을 확인한 뒤 저장소의 `.runtime`에 Go와 PostgreSQL을 설치하고, 한국어
-정적 UI를 내장한 `artex.exe`, 로컬 데이터베이스와 `START-ARTEX-KO.cmd`를 만듭니다.
+기본 포트는 ARTEX `8787`, PostgreSQL `5433`입니다. 바꿔야 하면 설치 시 `-WebPort`, `-PostgresPort` 옵션을 지정하세요. 기존 PC의 `config.json`, 데이터베이스, API 키, 작업 기록, 모델 가중치는 Git에 포함되지 않으며 새 설치로 이전되지 않습니다.
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install-windows.ps1
-```
-
-설치만 하고 즉시 실행하지 않으려면 `-NoStart`를 사용합니다.
-
-```powershell
-.\scripts\install-windows.ps1 -NoStart
-```
-
-포트를 바꿀 수도 있습니다.
-
-```powershell
-.\scripts\install-windows.ps1 -PostgresPort 55433 -WebPort 8877
-```
-
-PostgreSQL은 기본적으로 외부에 노출되지 않는 `127.0.0.1:5433`에만 바인딩되고,
-무작위 데이터베이스 비밀번호와 TCP용 SCRAM 인증을 구성합니다. 설치 후에는
-`START-ARTEX-KO.cmd`를 실행하고 `http://127.0.0.1:8787/setup`에서 관리자 계정과
-초기 비밀번호를 설정하십시오. LM Studio와 로컬 모델이 이미 설치되어 있으면 설치 스크립트가
-로컬 API 서버를 시작하고 모델을 로드한 뒤, `LM Studio Local` 프로필을 자동으로 등록·활성화합니다.
-클라우드 API 키는 설치 스크립트가 대신 만들거나 저장하지 않습니다.
-
-LM Studio 자동 연결을 원하지 않으면 `-SkipLMStudio`를 사용합니다. 설치된 모델이 여러
-개라면 `-LMStudioModel`로 사용할 모델 키를 지정할 수 있습니다.
-
-```powershell
-.\scripts\install-windows.ps1 -LMStudioModel qwen/qwen3-8b
-.\scripts\install-windows.ps1 -SkipLMStudio
-```
-
-ARTEX 설치 후에만 로컬 LLM을 연결하거나 설정을 다시 맞추려면 다음 스크립트를 실행합니다.
-이 작업은 멱등하므로 반복 실행해도 같은 이름의 프로필이 중복 생성되지 않습니다.
-
-```powershell
-.\scripts\configure-lmstudio.ps1 -Model qwen/qwen3-8b -ProfileName 'LM Studio Qwen3 8B'
-```
-
-로컬 통합 검증에는 `qwen/qwen3.5-9b`, 컨텍스트 64K(65,536 token), LM Studio 병렬 1,
-비스트리밍, ARTEX worker 2개를 사용했습니다. 같은 설정을 적용하려면 해당 모델을 LM Studio에
-먼저 설치·로드할 수 있는 하드웨어가 필요합니다. 개인 DB 비밀번호와 API 키는 이
-저장소에 포함하지 않습니다.
-
-```powershell
-.\scripts\configure-lmstudio.ps1 -Model qwen/qwen3.5-9b `
-  -ProfileName 'LM Studio Qwen3.5 9B' -ContextWindowK 64 `
-  -MaxTokens 0 -NonStreaming -Parallel 1 -Workers 2
-```
-
-`-MaxTokens 0`은 ARTEX가 별도 출력 상한을 보내지 않고 공급자 기본값을 따르게
-합니다. 로컬 검증에서 모델 호출과 취약점 등록은 동작했지만, 이 모델의 플래너
-중간 출력에는 중국어가 섞인 적이 있어 최종 보고서를 사람이 확인해야 합니다.
-
-기본값은 컨텍스트 16K, LM Studio 병렬 요청 2개, ARTEX worker 2개, 응답 상한
-4,096 token입니다. 모델을 지정하지 않으면 현재 로드된 LLM을 우선 사용하고, 없으면
-설치된 첫 번째 LLM을 선택합니다. 모델 파일 자체는 크고 하드웨어 요구량이 다르므로
-자동 다운로드하지 않습니다. LM Studio에 설치된 LLM이 하나도 없으면 안내와 함께
-자동 연결만 건너뜁니다.
-
-#### REA 역공학 도구 연결 (Windows + WSL)
-
-이 저장소에는 ARTEX↔REA MCP 브리지와 **다운로드·설치·등록 스크립트**가 포함됩니다.
-로컬 ELF 분석에는 WSL Ubuntu 안의 Ghidra가 필요합니다. ARTEX 설치와 첫 실행
-(DB 스키마 생성) 뒤 PowerShell에서 다음을 실행하세요.
-
-```powershell
-.\scripts\install-rea-wsl.ps1 -Distro Ubuntu
-```
-
-WSL이 없다면 **관리자 PowerShell**에서 같은 명령을 실행하면 `wsl --install -d Ubuntu`를
-요청합니다. 이 단계에는 Windows 재시작이 필요할 수 있고, Ubuntu를 처음 열어
-Linux 계정과 암호를 만드는 과정은 직접 완료해야 합니다. 이후 **일반 PowerShell**에서
-명령을 다시 실행하세요. Ubuntu 패키지 설치 시 `sudo` 암호 입력이 필요합니다.
-스크립트는 Java 21과 유틸리티를 Ubuntu 패키지로 설치하고, 공식 Node.js 22 배포물은
-SHA-256 목록으로, Ghidra 12.1.4 ZIP은 고정 SHA-256으로 검증하여 WSL 사용자 홈에
-설치합니다. REA `rea-agents@6.4.0`은 npm으로 받습니다. 기존 설치는 재사용합니다.
-마지막으로 브리지 경로 변환과 MCP 도구 검색을 검사한 뒤 ARTEX DB에 `rea`를
-멱등 등록하고 `worker`에 노출합니다. 인터넷 연결과 충분한 디스크 공간이 필요합니다.
-배포처: [REA](https://github.com/morluto/rea), [Node.js](https://nodejs.org/en/download),
-[Ghidra](https://github.com/NationalSecurityAgency/ghidra/releases),
-[WSL](https://learn.microsoft.com/windows/wsl/install).
-
-수동 설치를 선호하면 `configure-rea-wsl.ps1 -GhidraDir /절대/경로`를 사용할 수
-있으며 `-ReaEntry`, `-LinuxNode`로 다른 설치 경로를 지정할 수 있습니다. 이후
-시스템 → MCP → `rea`에서 **도구 새로고침**을 눌러 검색된 도구가 표시되는지
-확인하세요. 바이너리 분석은 도구가 보이는 것과 별개로 실제 파일로 확인해야
-하며, `binary_overview`가 실패하면 WSL의 Ghidra/Java 경로와 권한을 점검하세요.
-REA 브리지는 Windows 파일 절대 경로를 WSL `/mnt/<드라이브>/...`로 변환합니다.
-외부 바이너리, Ghidra 설치물, 사용자 경로와 DB 비밀번호는 커밋하지 않습니다.
-
-한국어 출력과 도구 호출을 함께 사용할 때는 LM Studio가 `trainedForToolUse: true`로
-인식하는 Qwen3 8B를 권장합니다. Q4_K_M 모델은 약 5GB이며 8GB급 VRAM에서도 16K
-컨텍스트로 사용할 수 있습니다. 일반 대화형 모델은 한국어 문장을 만들 수 있어도 ARTEX의
-함수 호출을 안정적으로 생성하지 못할 수 있습니다.
-
-##### 실제 Windows 빌드 흐름
-
-자동화 스크립트가 내부에서 수행하는 핵심 단계는 다음과 같습니다. 문제를 진단하거나
-직접 재현해야 할 때 참고하십시오.
-
-1. `web`에서 `npm ci`로 devDependencies까지 설치합니다.
-2. PowerShell에서는 원본의 Unix식 `NEXT_EXPORT=1 ...` 구문 대신
-   `$env:NEXT_EXPORT='1'; npx next build`로 정적 UI를 빌드합니다.
-3. 최신 `@swc/core` Windows 네이티브 모듈을 불러오지 못하는 환경에서는 검증된
-   `@swc/core@1.15.18`과 `@swc/core-win32-x64-msvc@1.15.18`로 자동 재시도합니다.
-4. `web/out`을 `server/webui/dist`로 동기화하고 아래와 같은 단일 바이너리를 만듭니다.
-
-   ```powershell
-   $env:CGO_ENABLED='0'
-   go build -tags embedui -o artex.exe .\cmd\artex
-   ```
-
-5. 공식 PostgreSQL ZIP을 사용자 영역에 풀고 `127.0.0.1:5433`에서 시작한 뒤,
-   생성한 설정 파일의 접근 권한을 현재 사용자로 제한합니다.
-
-검증 당시 Next.js 정적 페이지 31개가 생성되었고, 한국어 UI가 포함된 `artex.exe`를
-빌드한 뒤 `/setup` 응답(HTTP 200)과 제목 `ARTEX: 자율 침투 테스트 콘솔`을
-확인했습니다. `npm audit` 결과를 없애기 위해 호환성을 깨뜨릴 수 있는
-`npm audit fix --force`는 자동 실행하지 않습니다.
+설치 오류가 나면 PowerShell에 표시된 **첫 번째 오류 메시지**를 확인하세요. `npm`을 찾지 못하면 Node.js를 설치하고 새 PowerShell을 여세요. 원본의 Docker/Linux 설치 방법은 [원본 문서](README.zh.md)를 참고할 수 있지만, 이 포크의 한국어 UI 설치는 위 Windows 절차를 기준으로 합니다.
 
 ---
 
 ## 설정
 
-**데이터베이스**(`config.json`, 또는 환경 변수 `ARTEX_PG_DSN` 로 덮어쓰기):
+**데이터베이스:** Windows 설치 스크립트가 로컬 PostgreSQL과 `config.json`을 자동으로 구성합니다. 비밀번호가 담긴 설정 파일은 공유하지 마세요.
 
-```json
-{
-  "database": {
-    "host": "127.0.0.1", "port": 5432,
-    "user": "artex", "password": "yourpass",
-    "dbname": "artex", "sslmode": "disable"
-  }
-}
-```
+**LLM:** 설치 후 ARTEX의 **시스템 → LLM**에서 사용할 공급자·모델·API 키를 등록합니다. 로컬 모델은 LM Studio, ChatGPT 구독은 아래 연결 안내를 따르세요. 키는 README나 Git에 올리지 마세요.
 
-**LLM:** `export ANTHROPIC_API_KEY=sk-...`(또는 `OPENAI_API_KEY`), 혹은 UI 의 "LLM 설정" 페이지에서 입력합니다. 선택 환경 변수로 `ARTEX_LLM_PROVIDER` / `ARTEX_LLM_MODEL` / `ARTEX_LLM_BASE_URL` / `ARTEX_LLM_PROXY` 를 둘 수 있습니다. 국산·오픈 모델을 쓰려면 OpenAI 호환 `ARTEX_LLM_BASE_URL` 을 지정하십시오.
-
-**ChatGPT Plus/Pro 구독(Windows 로컬 설치, 시험 통합):** 공식 OAuth 로그인으로 ARTEX의 Responses 프로필을 구독 사용량에 연결하는 방법은 [ChatGPT 구독 연동 안내](docs/ChatGPT-구독-연동.md)를 참고하십시오. OpenAI API 키나 Codex 앱 인증 파일을 재사용하는 방식이 아니며, 별도의 로컬 브리지를 실행해야 합니다. 실사용 전 로그인·계정별 모델·도구 호출을 테스트하세요.
+**ChatGPT Plus/Pro 구독(시험 통합):** [구독 연동 안내](docs/ChatGPT-구독-연동.md)에 따라 별도 로컬 브리지를 로그인·실행하고 연결 테스트를 하세요. OpenAI API 키나 Codex 앱 인증 파일을 재사용하지 않습니다.
 
 **동시성:** 작업마다 돌리는 worker 에이전트 수는 "시스템 설정"에서 조정합니다(기본값 3).
 
-**자주 쓰는 인자:** `./start.sh -addr :8787 -proxy :8788` — `-addr` 는 프런트엔드와 API, `-proxy` 는 트래픽 기록 프록시 포트입니다.
+**실행:** 설치 폴더의 `START-ARTEX-KO.cmd`를 실행하면 기본 주소 `http://127.0.0.1:8787`에서 열립니다.
 
 ### 모델 선택과 출력 언어
 
