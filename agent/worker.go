@@ -549,6 +549,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if strings.TrimSpace(overview) != "" {
 		input += "\n\n참고용 전체 진행 상황:\n" + overview
 	}
+	input += recentProgressAudit(ts)
 
 	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
 	noaSession := WorkerSessionID(ts.ID(), intent.ID)

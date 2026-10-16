@@ -1066,19 +1066,21 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			}
 		}
 	}
-	// A planner may submit the same direction again while a worker is already
-	// executing it. Do not spend a second worker slot on an identical active task.
+	// Do not let a fresh planning round recycle an identical direction after it
+	// finished, either. A legitimate retest can reopen that intent; a genuinely
+	// new direction must say what changed in its summary. This guard is agnostic
+	// to the target protocol, vulnerability and tool choice.
 	if existing, err := t.ts.ListByKind(db.KindIntent, 1000); err == nil {
 		wanted := normalizedIntentSummary(it.Summary)
 		for _, node := range existing {
-			if node.State != "open" && node.State != "running" && node.State != "paused" {
+			if node.State == "deleted" {
 				continue
 			}
 			var payload struct {
 				Summary string `json:"summary"`
 			}
 			if json.Unmarshal(node.Payload, &payload) == nil && normalizedIntentSummary(payload.Summary) == wanted {
-				return 0, fmt.Errorf("동일한 탐색 의도가 이미 대기 또는 실행 중입니다: %d", node.ID)
+				return 0, fmt.Errorf("동일한 탐색 의도가 이미 존재합니다: %d (동일 검증은 기존 의도를 재실행하고, 새 방향은 변경된 근거와 검증 질문을 summary에 명시하세요)", node.ID)
 			}
 		}
 	}
