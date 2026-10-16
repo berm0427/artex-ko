@@ -70,6 +70,26 @@ ARTEX의 **시스템 → LLM → 새 설정**에서 다음처럼 추가합니다
 
 연결 테스트에서 `invalid local bridge key`가 나오면 프로필 편집창의 **API 키** 입력칸에 브라우저가 다른 비밀번호를 자동 입력했는지 확인하세요. 기존 프로필의 키를 유지하려면 그 칸을 완전히 비워 둔 채 테스트·저장해야 합니다. 최신 화면은 로그인 비밀번호 자동완성을 억제하지만, 비밀번호 관리 도구가 별도로 값을 채운 경우에는 직접 지워야 합니다.
 
+### 브리지 창이 닫혔거나 `Connected: false`가 나올 때
+
+`serve`를 실행한 창이 사라져도 브리지 프로세스가 남아 있을 수 있습니다. 먼저 **브리지를 실행한 PC의 PowerShell**에서 `status`를 다시 확인하세요. `status`의 키 전체를 채팅, 이슈 또는 로그에 게시하지 마세요. 다른 실행 환경에서 같은 사용자 이름·PC 이름·경로가 보여도 인증 파일의 내용이 같다고 단정하지 말고, 실제 브리지를 실행하는 PowerShell의 결과를 기준으로 삼으세요.
+
+```powershell
+& "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" status
+Get-CimInstance Win32_Process -Filter "name='chatgpt-plan-bridge.exe'" |
+  Select-Object ProcessId,ExecutablePath,CommandLine
+```
+
+남은 프로세스의 `ExecutablePath`가 위 브리지 실행 파일이고 `CommandLine`이 `serve`인 것을 확인한 경우에만, 표시된 **해당 PID 하나**를 종료합니다. 아래 `PID`는 실제 조회된 번호로 바꾸세요. 다른 프로그램이나 ARTEX 서버를 종료하지 마세요.
+
+```powershell
+Stop-Process -Id PID
+& "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" login
+& "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" serve
+```
+
+`login`은 브라우저 승인을 마칠 때까지 기다린 뒤 실행하세요. `serve`는 실행된 채로 두고, **다른 PowerShell 창**에서 `status`가 `Connected: true`인지 확인합니다. 이후 ARTEX의 연결 테스트를 다시 실행하세요. `401 invalid local bridge key`가 계속되면, 그 PowerShell의 `status`에 표시된 키와 ARTEX LLM 프로필에 저장된 키를 로컬에서 맞추세요. 키는 브리지를 단순히 다시 실행한다고 매번 바뀌는 것은 아닙니다.
+
 ## 보안과 한도
 
 - OAuth 액세스·갱신 토큰은 사용자 설정 폴더의 Windows DPAPI 암호화 파일에만 저장됩니다. Git·ARTEX DB·브라우저 저장소에 저장하지 않습니다.
