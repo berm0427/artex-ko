@@ -947,6 +947,48 @@ func (t *ToolSet) listFindings() actool.CoreTool {
 // context, so default to the newest page and let the agent page/filter for more.
 const factsPageSize = 20
 
+// listIntents lets the planner inspect older directions before proposing another
+// experiment. graph_overview intentionally includes only a recent window.
+func (t *ToolSet) listIntents() actool.CoreTool {
+	return t.readExpTool("list_intents", "현재 작업과 직접 연결된 작업의 과거 탐색 의도를 최신순으로 검색합니다. 새 실험을 만들기 전에 같은 입력·상태·검증 질문을 이미 시험했는지 q와 before로 확인하세요. 연결된 작업의 항목은 읽기 전용입니다.",
+		obj(map[string]any{
+			"limit":  intp("반환할 항목 수(기본 20, 최대 50)"),
+			"before": intp("페이지 커서: 이 ID보다 오래된 의도만 반환. 0은 최신 페이지"),
+			"q":      str("의도 요약 키워드 필터(대소문자 무시)"),
+		}),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			var a struct {
+				Limit  int    `json:"limit"`
+				Before int64  `json:"before"`
+				Q      string `json:"q"`
+			}
+			_ = json.Unmarshal(in, &a)
+			limit := a.Limit
+			if limit <= 0 {
+				limit = 20
+			}
+			if limit > 50 {
+				limit = 50
+			}
+			intents, hasMore, total, err := t.ts.ListByKindPageWithSources(db.KindIntent, a.Before, limit, strings.TrimSpace(a.Q))
+			if err != nil {
+				return actool.Result{}, err
+			}
+			out := compactIntents(intents, nil, nil)
+			for _, item := range out {
+				if summary, ok := item["summary"].(string); ok && len([]rune(summary)) > 400 {
+					item["summary"] = string([]rune(summary)[:400]) + "…"
+					item["summary_truncated"] = true
+				}
+			}
+			res := map[string]any{"intents": out, "total": total, "has_more": hasMore}
+			if hasMore && len(intents) > 0 {
+				res["next_before"] = intents[len(intents)-1].ID
+			}
+			return jsonResult(res)
+		})
+}
+
 func (t *ToolSet) listFacts() actool.CoreTool {
 	return t.readExpTool("list_facts", "현재 작업과 직접 연결된 작업의 탐색 사실·결론을 최신순으로 페이지 단위로 나열합니다. limit(기본 20, 최대 100), before(이전 응답의 next_before), q(요약 키워드)는 선택 사항입니다. facts/total/has_more/next_before를 반환합니다. 연결된 작업의 항목은 읽기 전용입니다. 전체 내용은 node_detail(id), 취약점은 list_findings로 조회하세요.",
 		obj(map[string]any{
@@ -2375,7 +2417,7 @@ func (t *ToolSet) listWorkerTraces() actool.CoreTool {
 // PlannerTools is the read + intent-generation + goal-judgement tool set.
 func (t *ToolSet) PlannerTools() []actool.CoreTool {
 	return []actool.CoreTool{
-		t.graphOverview(), t.listFindings(), t.listFacts(), t.nodeDetail(),
+		t.graphOverview(), t.listFindings(), t.listFacts(), t.listIntents(), t.nodeDetail(),
 		// cold-digest §6.1: restore folded cold nodes (digest body → members → detail).
 		t.expandDigest(),
 		t.getWorkerOutput(), t.getWorkerTrace(), t.searchAllWorkerTraces(), t.listGoals(), t.addIntent(), t.proveGoal(), t.goalMet(),

@@ -300,8 +300,8 @@ const plannerDefaultTmpl = `당신은 승인된 보안 점검 시스템의 계�
 작업 목표: {{.Goal}}
 
 **이번 회차의 의도 생성 기준**
-- **최우선 기준**: 목표가 아직 달성되지 않았고 open/running 의도가 전혀 없으면(frontier_open=0, running_intents 비어 있음) 목표로 나아가는 의도를 적어도 하나 생성하세요. 대기 중인 방향도 실행 중인 작업도 없는 상태에서 0개를 생성하면 작업이 멈춥니다. recent_done만 남았다면 아래의 상태별 기준으로 새 경로를 시작하거나 중단된 경로를 이어가세요.
-- 그 밖에 0개는 정당한 경우에만 허용됩니다. 가능한 방향이 모두 open/running 의도로 이미 처리 중이거나, 다음 단계가 실행 중인 의도의 실제 결과에 의존한다면 기다리세요. 표현만 바꾼 중복 의도를 만들지 마세요.
+- 목표가 아직 달성되지 않았고 open/running 의도가 전혀 없어도, 이전 결과와 구별되는 새 근거·검증 질문이 없으면 의도를 0개 생성하세요. 진전이 없는 같은 실험을 작업 유지 목적으로 재생성하지 마세요. 새 입력이나 외부 상태를 기다리는 경우 그 이유를 기록하세요.
+- 가능한 방향이 모두 open/running 의도로 이미 처리 중이거나, 다음 단계가 실행 중인 의도의 실제 결과에 의존한다면 기다리세요. 표현만 바꾼 중복 의도를 만들지 마세요.
 - 아직 다루지 않았고 실행 중인 작업에 의존하지 않는 방향이나 범위 내 미검사 대상이 있다면 의도를 생성하세요.
 
 **회차별 판단 절차**
@@ -309,7 +309,7 @@ const plannerDefaultTmpl = `당신은 승인된 보안 점검 시스템의 계�
    - 목표·의도·사실·취약점 탐색 노드는 이 작업에 속하지만, 자산 그래프는 모든 작업이 공유합니다. 다른 작업의 자산은 무시하세요.
    - 각 의도의 parents/yields와 사실의 from_intent로 상위 근거와 하위 결과를 연결하세요.
    - 포트 닫힘이나 주입 불가 같은 부정 관찰은 실행 에이전트의 관찰이지 자동 확정이 아닙니다. node_detail(id)로 증거를 읽으세요. 충분한 증거, confidence=observed, 합리적인 방법의 검토가 함께 있을 때만 일단 막힌 경로로 보세요. 증거가 없거나 단일 시도 또는 confidence=inferred라면 미확인으로 보고, 범위 내이며 다른 의도가 다루지 않을 때 복증 의도를 한 번 만들 수 있습니다. 동일한 부정 방향은 최대 한 번만 복증하고 합리적인 부정 증거가 나오면 존중하세요.
-   - 추가 상세 내용이 필요할 때만 list_facts(기본 20개, q/before 페이지), list_findings, node_detail, list_assets(q/type/company_id/task_id/id/ids), asset_neighbors를 사용하세요. 공유 자산을 매번 전부 가져오지 마세요.
+   - 추가 상세 내용이 필요할 때만 list_facts(기본 20개, q/before 페이지), list_intents(q/before로 과거 의도 검색), list_findings, node_detail, list_assets(q/type/company_id/task_id/id/ids), asset_neighbors를 사용하세요. 공유 자산을 매번 전부 가져오지 마세요.
 
 2. **목표 판정**: 발견·사실이 미달성 목표를 실제로 입증하면 prove_goal(goal_id, evidence_id, reason)으로 met 처리하세요. 마지막 목표가 입증되면 시스템이 작업을 자동 완료합니다. 별도의 일괄 완료 수단은 없습니다.
    - 목표에 정량 기준(커버리지 X%, 플래그 N개, 특정 권한 등)이 있다면 prove_goal 전에 graph_overview의 coverage.pct, findings_total 등 실제 값을 확인하세요. 미달이면 달성 처리하지 말고 부족한 부분을 검증할 의도를 만드세요. 일부 성과를 전체 달성으로 간주하지 마세요.
@@ -322,13 +322,13 @@ const plannerDefaultTmpl = `당신은 승인된 보안 점검 시스템의 계�
 4. **새 방향 선정**: 절제는 기존 의도를 반복하지 않는다는 뜻이지 가능한 작업을 줄이라는 뜻이 아닙니다. 목표가 미달성이라면 더 깊고 본질적으로 다른 미검토 방향을 찾으세요. 의도는 고정 분류가 아닌 열린 탐색 방향입니다. open/running/recent_done과 비교하세요.
    - open/running이 이미 다루면 생성하지 마세요.
    - recent_done에 있으면 상태를 확인하세요. done은 정상 종료이므로 그대로 재배정하지 말고, yields의 사실을 검토해 실질적인 새 근거가 있을 때만 새 차이를 summary에 명시하세요. exhausted는 예산 소진, blocked는 모델·네트워크 실패 등으로 미완료일 수 있습니다. get_worker_trace/get_worker_output으로 실제 진행과 중단 원인을 확인한 뒤 이어서 진행·동일 방향 재시도·다른 방법 중 하나를 선택하세요. 상태값만으로 결론 내리지 마세요.
-   - 아무 의도도 다루지 않는 새 방향은 생성하세요. 알려진 모든 방향이 open/running에서 처리 중이면 기다리되, 목표가 미달성이고 recent_done만 남았다면 최우선 기준에 따라 새 방향 또는 이어갈 방향을 마련하세요.
+   - 아무 의도도 다루지 않는 새 방향이 실제로 있으면 생성하세요. 목표가 미달성이어도 기존 결과와 구별되는 검증 가설이나 새 근거를 특정하지 못하면 0개를 허용하고, 확인된 한계와 필요한 다음 입력을 기록하세요.
    - 커버리지는 최소 기준 또는 검수 기준이지 유일한 탐색 목표가 아닙니다. 실제로 가치 높은 진입점이 확인되면 단순히 자산을 얕게 넓히기보다 그 경로를 심층 검증하세요.
    - 한 경로에 너무 일찍 수렴하지 마세요. 범위 내에서 원리가 다른 미검토 진입점·자산·연쇄 경로가 있으면 보완하세요. 다만 **작업 제약 조건이 다양성보다 우선**입니다. 제외된 호스트·포트·행위에 대한 의도를 만들지 마세요.
    - **순차 의존 경로는 병렬로 쪼개지 마세요.** TodoWrite에 각 단계를 남기고 전제 조건이 충족된 한 단계만 배정하세요. 실제 fact가 나오면 다음 회차에 이어가세요. 같은 일을 표현만 달리해 두 개로 나누지 마세요. 독립적인 차원에만 병렬 의도를 사용하세요.
 
 5. **제출**: add_intent를 한 번 호출해 가장 가치 높은 새 방향을 intents 배열로 최대 4개까지 제출하세요.
-   - summary에는 대상의 전체 주소, 할 일, 이유를 자연어 한 문장으로 적으세요. 기존 의도와 비교해 중복을 제거하세요.
+   - summary에는 대상의 전체 주소, 할 일, 이유와 기존 검사와 다른 변수·예상 관찰을 적으세요. graph_overview의 최근 창에 없는 과거 의도도 list_intents로 찾아 비교하고, 동일한 입력·환경·검증 질문이면 재실행하지 마세요.
    - 구체적인 대상 자산이 있으면 list_assets에서 확인한 asset_ids를 전달하세요. 여러 자산이 관련되면 모두 넣고, 대상 자산이 없는 전역 정찰에만 비워 두세요.
    - 사실·의도·발견에서 파생된 방향이라면 관련 parent_ids를 전달하세요. 독립적인 최상위 새 방향만 비워 두세요.
 
@@ -336,6 +336,9 @@ const plannerDefaultTmpl = `당신은 승인된 보안 점검 시스템의 계�
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
+	// Existing installations may have an editable stored prompt with the old
+	// mandatory frontier-refill rule. Keep this anti-loop rule code-owned.
+	body += "\n\n**중복 실험 방지(다른 의도 생성 지침보다 우선)**: open/running 의도가 0개이고 목표가 미달성이어도 새 근거와 기존 실행과 구별되는 입력·상태·예상 관찰이 없으면 add_intent를 호출하지 마세요. 새 의도를 만들기 전에는 graph_overview의 최근 창뿐 아니라 list_intents(q/before)로 관련 과거 의도를 검색하고 해당 결과를 확인하세요. 같은 실험을 표현·횟수만 바꿔 반복하지 마세요. 새 실험의 가설, 성공 기준, 중단 기준을 구체적으로 밝히세요. 새 방향을 입증할 수 없거나 외부 입력을 기다린다면 의도를 만들지 않고 그 이유를 보고하세요."
 	body += "\n\n**미확인 입력 서비스의 후속 계획**: 서버가 `Input:` 같은 프롬프트만 보내고 이전 문자열 입력에 차이가 없었다면, `help`·`flag`·`status` 등 단어만 바꾼 의도를 새로 만들지 마세요. 기존 도구 출력에서 실제 전송 바이트·수신 바이트·연결 종료를 확인하고, 다음 의도에는 한 번에 한 변수만 바꾸는 입력 길이·종결 방식·동일 연결의 단계 변화처럼 이전 시도와 구별되는 검증 질문 및 관찰 기준을 명시하세요. 단순 무응답은 취약점 부재나 목표 달성의 증거가 아닙니다. 새로운 검증 질문을 만들 수 없다면 그 한계를 명확히 기록하세요."
 	return body + artifactSpec(workDir) + evidenceLedMethodRule + serviceProtocolEvidenceRule + serviceProgressRule + hypothesisCoverageRule + platformShellDirective() + langDirective()
 }
@@ -448,13 +451,12 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	lead := "방금 구체적인 변경이 있었습니다. 아래의 【이번 회차를 일으킨 실제 변경 사항】을 읽고 다음 단계를 계획하세요:"
 	if len(triggers) == 0 {
 		lead = "이번 회차는 정기 점검 또는 구체적 변경 신호가 없는 호출입니다. 그래프가 변경되지 않았을 수 있습니다. 실행 중인 의도를 확인하고, 장시간 진전이 없거나 방향을 벗어났다면 steer_work로 조정하고 방향 전체가 잘못됐다면 kill_work를 검토하세요. 그런 다음 목표와 새 방향 필요 여부를 판단하세요:"
-		// 心跳/无变动唤醒时,若全图已无任何 open 或 running 意图 → 探索已停摆(没 worker 在跑、
-		// 也没排队方向)。明确告知 planner 并强制其本轮补出新方向,别只复查在跑意图后空转一轮。
+		// An empty frontier is not by itself evidence of a novel experiment.
 		if active, err := ts.HasActiveIntent(); err == nil && !active {
-			lead = "이번 회차는 정기 점검이며 현재 open/running 의도가 전혀 없습니다. 실행 중이거나 대기 중인 방향이 없어 탐색이 멈춘 상태입니다. 아래 현황에서 목표 달성 여부를 먼저 판단하세요. 목표가 미달성이면 기존 의도와 중복되지 않는 새 의도를 이번 회차에 하나 이상 생성해야 합니다:"
+			lead = "이번 회차는 정기 점검이며 현재 open/running 의도가 전혀 없습니다. 목표 달성 여부와 새 근거가 있는지 판단하세요. 이미 시험한 방향만 남았다면 list_intents로 확인하고 새 의도를 만들지 말고, 필요한 다음 입력이나 장애물을 보고하세요:"
 		}
 	}
-	input := lead + situational + "\n\n위 현황을 바탕으로 목표를 판정하세요. 성과나 취약점이 실제로 확인되어 목표가 달성되었다면 prove_goal로 하나씩 표시하세요. **최우선 기준: 목표가 미달성이고 open/running 의도가 전혀 없으면(frontier_open=0, running_intents 비어 있음) 이번 회차에 목표로 나아가는 의도를 하나 이상 만들어야 합니다. 대기 중인 작업도 실행 중인 작업도 없는데 0개를 만들면 작업이 멈춥니다. open/running 의도가 진행 중이거나 목표가 달성된 경우에만 새 의도를 만들지 않을 수 있습니다.**" +
+	input := lead + situational + "\n\n위 현황을 바탕으로 목표를 판정하세요. 성과나 취약점이 실제로 확인되어 목표가 달성되었다면 prove_goal로 하나씩 표시하세요. **새 방향은 이전과 구별되는 근거·검증 질문이 있을 때만 만드세요. frontier_open=0이어도 동일 실험의 반복만 가능하다면 0개를 제출하고 그 한계 또는 기다리는 입력을 보고하세요.**" +
 		renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
