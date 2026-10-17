@@ -4,6 +4,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Net.Http
 $bridge = Join-Path $env:LOCALAPPDATA 'ARTEX\chatgpt-plan-bridge.exe'
 $endpoint = 'http://127.0.0.1:18789/v1/responses'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
