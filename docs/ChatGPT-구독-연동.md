@@ -29,6 +29,8 @@ go build -o "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" ./cmd/chatgpt-plan
 & "$env:LOCALAPPDATA\ARTEX\chatgpt-plan-bridge.exe" serve
 ```
 
+첫 로그인과 ARTEX의 LLM 프로필 설정을 마친 뒤에는 매번 위 명령을 따로 입력할 필요가 없습니다. 저장소 루트의 `START-ARTEX-WITH-CHATGPT.bat`를 실행하면 저장된 로그인 상태를 확인하고 브리지를 필요한 경우에만 켠 다음 PostgreSQL과 ARTEX를 시작합니다. 이어서 `http://127.0.0.1:8787`에 접속하세요. 브리지는 백그라운드에서 실행되며, 같은 키로 이미 실행 중이면 중복 실행하지 않습니다. 로그인 연결이 끊긴 경우에만 `login`을 다시 해야 합니다. 이 BAT는 키를 출력하거나 Git에 저장하지 않습니다.
+
 ### 실행 파일을 찾을 수 없다는 오류가 날 때
 
 PowerShell의 `CommandNotFoundException`과 함께 `chatgpt-plan-bridge.exe`를 찾을 수 없다고 나오면, 우선 **오류가 난 바로 그 PowerShell 창**에서 설치 경로를 확인하세요.

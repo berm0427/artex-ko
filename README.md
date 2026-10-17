@@ -100,6 +100,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 - **LM Studio를 이미 사용 중이라면:** 설치 명령에서 `-SkipLMStudio`를 빼면 로컬 모델 자동 연결을 시도합니다. 모델 파일은 자동 다운로드하지 않습니다. 나중에 연결하려면 `scripts/configure-lmstudio.ps1`을 사용하세요.
 - **ChatGPT Plus/Pro 구독을 연결하려면:** [구독 연동 안내](docs/ChatGPT-구독-연동.md)를 따라 브리지를 설치·로그인하고 ARTEX에 Responses 프로필을 등록하세요.
+- **구독 연결을 끝낸 뒤부터는:** `START-ARTEX-WITH-CHATGPT.bat` 하나로 브리지와 ARTEX를 함께 켜세요. 브라우저에서 `http://127.0.0.1:8787`에 접속하면 됩니다.
 - **REA 역공학 도구가 필요하면:** ARTEX를 한 번 실행한 뒤 `.\scripts\install-rea-wsl.ps1 -Distro Ubuntu`를 실행하세요. WSL/Ubuntu 최초 설치에는 관리자 권한, 재부팅 및 Linux 계정 설정이 필요할 수 있습니다. 설치 후 **시스템 → MCP**에서 `rea` 도구를 확인하세요.
 
 기본 포트는 ARTEX `8787`, PostgreSQL `5433`입니다. 바꿔야 하면 설치 시 `-WebPort`, `-PostgresPort` 옵션을 지정하세요. 기존 PC의 `config.json`, 데이터베이스, API 키, 작업 기록, 모델 가중치는 Git에 포함되지 않으며 새 설치로 이전되지 않습니다.
