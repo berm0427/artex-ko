@@ -199,6 +199,52 @@ func codexHelpShouldRequest(now, requestedAt, latestIntent, latestReply int64, r
 	return retries < 2 && now-requestedAt >= 600, true
 }
 
+// Active workers are not automatically interrupted. After several completed
+// intents in a short window, ask Codex to review whether they represent real
+// progress or a loop. Only a reviewed reply may advise the task through chat.
+func codexHelpActiveReviewDue(now, latestDone, previousDone, previousAt int64, recentDone, newDone int) bool {
+	return latestDone > 0 && recentDone >= 4 &&
+		(previousDone == 0 || (latestDone > previousDone && newDone >= 3)) &&
+		(previousAt == 0 || now-previousAt >= 600)
+}
+
+func (sc *Scheduler) codexHelpActiveReview(task *Task, cfg codexHelpConfig, id, now int64) {
+	var latestDone, recentDone int64
+	if err := sc.pg.QueryRow(`SELECT COALESCE(MAX(id),0), COUNT(*) FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state='done'
+AND completed_at > NOW() - INTERVAL '45 minutes'`, task.ExpID).Scan(&latestDone, &recentDone); err != nil {
+		return
+	}
+	key := fmt.Sprintf("codex_help_active_review_%d", id)
+	marker, err := sc.pg.GetSchedState(key)
+	if err != nil {
+		return
+	}
+	var previousDone, previousAt int64
+	_, _ = fmt.Sscanf(marker, "%d:%d", &previousDone, &previousAt)
+	var newDone int64
+	if previousDone > 0 {
+		if err := sc.pg.QueryRow(`SELECT COUNT(*) FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state='done' AND id>$2
+AND completed_at > NOW() - INTERVAL '45 minutes'`, task.ExpID, previousDone).Scan(&newDone); err != nil {
+			return
+		}
+	}
+	if !codexHelpActiveReviewDue(now, latestDone, previousDone, previousAt, int(recentDone), int(newDone)) {
+		return
+	}
+	message := fmt.Sprintf("ARTEX 진행 중 검토 요청: 작업 #%d에서 최근 45분 동안 완료된 의도가 %d개입니다. 진행 중인 의도를 자동 중단하지 말고, 최근 의도·원시 관찰·새 증거를 비교해 실제 진전인지 반복인지 판단해 주세요. 반복이라고 확인된 경우에만 다른 가설과 구별 가능한 단일 검증을 제안하고, 검토한 조언을 표준 입력으로 %q -TaskId %d 에 전달하세요. 이 스크립트가 로컬 인증으로 ARTEX /api/chat?task=%d 에 전송합니다. 인증 키는 출력하지 마세요. 서로 다른 유효한 실험이라면 추가 의도를 강요하지 말고 그 이유를 사용자에게 알리세요. 허가 범위를 지키고 실제 대상 응답 없이 성공으로 판정하지 마세요.", id, recentDone, filepath.Join(filepath.Dir(sc.s.m.dir), "scripts", "send-codex-help.ps1"), id, id)
+	if err := queueCodexHelp(cfg, message); err != nil {
+		log.Printf("[codex-help] task=%d active review queue failed: %v", id, err)
+		return
+	}
+	if err := sc.pg.SetSchedState(key, fmt.Sprintf("%d:%d", latestDone, now)); err != nil {
+		log.Printf("[codex-help] task=%d active review marker failed: %v", id, err)
+		return
+	}
+	log.Printf("[codex-help] task=%d active progress review queued", id)
+}
+
 // codexHelpStep is event-driven by ARTEX's own scheduler tick. A request only
 // goes out when an unfinished task has been idle without an active intent.
 // The Codex conversation inspects the local evidence and may reply through
@@ -237,15 +283,22 @@ func (sc *Scheduler) codexHelpStep() {
 			continue
 		}
 		state := task.lifecycleSnapshot()
-		if state.Paused || state.Queued || isTerminalStatus(state.Status) || sc.s.engine.IsDeleting(task.ID) || sc.s.engine.ActiveLLMCalls(task.ID) > 0 {
+		if state.Paused || state.Queued || isTerminalStatus(state.Status) || sc.s.engine.IsDeleting(task.ID) {
 			continue
 		}
 		active, err := task.Store.HasActiveIntent()
-		if err != nil || active {
+		if err != nil {
 			continue
 		}
 		open, err := task.Store.HasOpenGoal()
 		if err != nil || !open {
+			continue
+		}
+		if active {
+			sc.codexHelpActiveReview(task, cfg, id, now)
+			continue
+		}
+		if sc.s.engine.ActiveLLMCalls(task.ID) > 0 {
 			continue
 		}
 		// Planner status chatter is not progress. Once a task has existed

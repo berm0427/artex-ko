@@ -75,6 +75,28 @@ func TestCodexHelpShouldRequest(t *testing.T) {
 	}
 }
 
+func TestCodexHelpActiveReviewDue(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		now, latest, previous, sentAt int64
+		recent, new                   int
+		want                          bool
+	}{
+		{"first review after four intents", 1000, 40, 0, 0, 4, 0, true},
+		{"too few completed intents", 1000, 40, 0, 0, 3, 0, false},
+		{"same evidence", 2000, 40, 40, 1000, 5, 0, false},
+		{"only one new intent", 2000, 41, 40, 1000, 5, 1, false},
+		{"cooldown", 1500, 43, 40, 1000, 7, 3, false},
+		{"fresh review", 1600, 43, 40, 1000, 7, 3, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codexHelpActiveReviewDue(tc.now, tc.latest, tc.previous, tc.sentAt, tc.recent, tc.new); got != tc.want {
+				t.Fatalf("due=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCodexHelpReplyOnlyAllowsLocalTaskChat(t *testing.T) {
 	dir := t.TempDir()
 	key := strings.Repeat("x", 43)
