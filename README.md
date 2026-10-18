@@ -37,7 +37,7 @@ ChatGPT Plus/Pro 연결은 일반 OpenAI API 키와 별개인 로컬 브리지�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\connect-codex-help.ps1 -ThreadId "대화-UUID"
 ```
 
-이후 `START-ARTEX-WITH-CHATGPT.bat`은 Codex CLI 경로를 갱신합니다. ARTEX 작업에 열린 목표는 있지만 새 실험 없이 멈추면, ARTEX 내부 스케줄러가 기존 Codex 대화에 작업 번호와 검토 요청을 보냅니다. Codex가 기록을 검토해 근거 있는 조언을 만들면 기존 ARTEX 채팅 경로(`/api/chat?task=작업번호`)로 전달할 수 있습니다. **도움 요청을 보낸 것 자체가 자동 답변이나 문제 해결을 뜻하지는 않습니다.** 목표 성공은 실제 대상 응답으로만 판정합니다.
+이후 `START-ARTEX-WITH-CHATGPT.bat`은 Codex CLI 경로를 갱신합니다. ARTEX 작업에 열린 목표는 있지만 새 실험 없이 멈추면, ARTEX 내부 스케줄러가 기존 Codex 대화에 작업 번호와 검토 요청을 보냅니다. Codex가 기록을 검토해 근거 있는 조언을 만들면 `scripts/send-codex-help.ps1`이 로컬 전용 키로 기존 ARTEX 채팅 경로(`/api/chat?task=작업번호`)에 전달합니다. 답변이 없으면 일정 시간 후 최대 두 번 재요청하고, 전달된 답변은 작업 기록에서 확인합니다. **도움 요청을 보낸 것 자체가 자동 답변이나 문제 해결을 뜻하지는 않습니다.** 목표 성공은 실제 대상 응답으로만 판정합니다.
 
 연결 정보는 Git에서 제외되는 `data/codex-help.json`에 저장됩니다. Codex 예약 작업이나 별도의 복제 모델 세션을 만들지 않습니다. 자동 후속 작업 생성은 기본 시작 BAT에서 켜지지 않습니다. 연결을 끄려면 ARTEX를 종료한 뒤 이 로컬 연결 파일만 제거하세요.
 

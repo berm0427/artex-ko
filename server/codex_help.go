@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,11 +16,42 @@ import (
 	"time"
 )
 
+const codexHelpReplyHeader = "X-ARTEX-Codex-Help-Key"
+
+// Only the existing task chat may be reached with the local help key. The key
+// never authorizes task management, settings or requests from another host.
+func (s *Server) validCodexHelpReply(r *http.Request) bool {
+	if r.Method != http.MethodPost || r.URL.Path != "/api/chat" || s.m == nil {
+		return false
+	}
+	if id, err := strconv.ParseInt(r.URL.Query().Get("task"), 10, 64); err != nil || id <= 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || !net.ParseIP(host).IsLoopback() {
+		return false
+	}
+	provided := r.Header.Get(codexHelpReplyHeader)
+	if len(provided) != 43 {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(s.m.dir, "codex-help.json"))
+	if err != nil {
+		return false
+	}
+	var cfg codexHelpConfig
+	if json.Unmarshal(data, &cfg) != nil || len(cfg.ReplyKey) != 43 {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(cfg.ReplyKey)) == 1
+}
+
 // codexHelpConfig connects ARTEX to an existing Codex conversation. It is
 // deliberately local and opt-in: no new model session or scheduled automation.
 type codexHelpConfig struct {
 	ThreadID string `json:"thread_id"`
 	CLIPath  string `json:"cli_path"`
+	ReplyKey string `json:"reply_key"`
 }
 
 func (sc *Scheduler) codexHelpConfig() (codexHelpConfig, error) {
@@ -31,7 +64,7 @@ func (sc *Scheduler) codexHelpConfig() (codexHelpConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, err
 	}
-	if !validCodexThreadID(cfg.ThreadID) || cfg.CLIPath == "" {
+	if !validCodexThreadID(cfg.ThreadID) || cfg.CLIPath == "" || len(cfg.ReplyKey) != 43 {
 		return cfg, fmt.Errorf("invalid Codex help configuration")
 	}
 	if info, err := os.Stat(cfg.CLIPath); err != nil || info.IsDir() {
@@ -78,6 +111,8 @@ func classifyModelFailure(line string) string {
 		return "auth_dns"
 	case strings.Contains(s, "invalid local bridge key"):
 		return "bridge_key"
+	case strings.Contains(s, "token_revoked") || strings.Contains(s, "invalidated oauth token"):
+		return "auth_revoked"
 	default:
 		return ""
 	}
@@ -107,6 +142,8 @@ func (sc *Scheduler) handleTaskModelFailure(task *Task, cfg codexHelpConfig) boo
 			message += "auth.openai.com DNS 조회 실패입니다. 풀이 실패가 아니므로 새 공격 가설이나 후속 작업을 만들지 말고 네트워크/DNS 복구를 확인해 주세요. 원본 작업은 복구 시 다시 깨웁니다."
 		case "bridge_key":
 			message += "로컬 브리지 키 불일치입니다. 키 원문은 공유하지 말고 브리지 연결·설정의 일치 여부를 점검해 주세요."
+		case "auth_revoked":
+			message += "ChatGPT OAuth 연결이 해제되었습니다. 풀이 실패가 아니므로 새 공격 가설을 만들지 말고 사용자의 재로그인과 브리지 재기동을 기다려 주세요."
 		}
 		if err := queueCodexHelp(cfg, message); err != nil {
 			log.Printf("[codex-help] task=%d model error queue failed: %v", id, err)
@@ -143,8 +180,23 @@ func queueCodexHelp(cfg codexHelpConfig, message string) error {
 	return nil
 }
 
-func codexHelpRequestMessage(id int64) string {
-	return fmt.Sprintf("ARTEX 도움 요청: 작업 #%d의 목표가 열린 채 새 의도 없이 멈췄습니다. 로컬 ARTEX의 목표·제약·최근 실험과 실패 응답을 확인하세요. 단순히 질문에만 답하거나 '더 분석하라'는 일반론으로 끝내지 말고, 확인된 사실과 추론을 구분해 왜 멈췄는지 설명하고, 중복되지 않는 다음 가설·실제 수행 가능한 한 가지 검증 실험·예상되는 원시 응답 또는 관찰값·결과별 다음 분기를 구체적으로 제안해 주세요. 국소적인 결함 검증에 목표 출력의 사전 증명까지 요구하여 모든 실험을 중단시키지 마세요. 근거가 있으면 기존 ARTEX /api/chat?task=%d 경로로 충분한 맥락과 함께 전달하고 이 대화 사용자에게 알리세요. 근거가 없으면 억지 실험이나 성공을 꾸미지 말고 한계를 보고하세요. 작업의 허가 범위를 지키고 실제 대상 응답 없이 성공으로 판정하지 마세요.", id, id)
+func codexHelpRequestMessage(id int64, scriptPath string) string {
+	return fmt.Sprintf("ARTEX 도움 요청: 작업 #%d의 목표가 열린 채 새 의도 없이 멈췄습니다. 로컬 ARTEX의 목표·제약·최근 실험과 실패 응답을 확인하세요. 확인된 사실과 추론을 구분해 왜 멈췄는지 설명하고, 중복되지 않는 다음 가설·수행 가능한 검증 실험 하나·예상 원시 응답·결과별 다음 분기를 제안해 주세요. 국소 결함 검증에 목표 출력의 사전 증명까지 요구해 모든 실험을 중단시키지 마세요. 근거가 있으면 검토한 조언을 표준 입력으로 %q -TaskId %d 에 전달하세요. 이 스크립트가 로컬 인증으로 ARTEX /api/chat?task=%d 에 전송합니다. 인증 키는 출력하거나 대화에 붙이지 마세요. 사용자에게도 결과를 알리세요. 근거가 없으면 억지 실험이나 성공을 꾸미지 말고 한계를 보고하세요. 작업의 허가 범위를 지키고 실제 대상 응답 없이 성공으로 판정하지 마세요.", id, scriptPath, id, id)
+}
+
+// A queued CLI message is not an answer. Retry a silent request at most twice,
+// and stop immediately once a reviewed response reaches the task chat.
+func codexHelpShouldRequest(now, requestedAt, latestIntent, latestReply int64, retries int) (send, retry bool) {
+	if requestedAt == 0 {
+		return true, false
+	}
+	if latestIntent > requestedAt && latestIntent > latestReply {
+		return now-latestIntent >= 90, false
+	}
+	if latestReply > requestedAt {
+		return false, false
+	}
+	return retries < 2 && now-requestedAt >= 600, true
 }
 
 // codexHelpStep is event-driven by ARTEX's own scheduler tick. A request only
@@ -210,22 +262,33 @@ func (sc *Scheduler) codexHelpStep() {
 		if err != nil {
 			continue
 		}
-		if marker != "" {
-			requestedAt, parseErr := strconv.ParseInt(marker, 10, 64)
-			if parseErr != nil {
-				continue
-			}
-			// A later, completed experiment earns another review. Planner
-			// chatter and repeated status messages do not.
-			var latestIntent int64
-			if err := sc.pg.QueryRow(`SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0)
-FROM exploration_nodes WHERE exploration_id=$1 AND kind='intent'`, task.ExpID).Scan(&latestIntent); err != nil || latestIntent <= requestedAt || now-latestIntent < 90 {
-				continue
-			}
+		requestedAt, _ := strconv.ParseInt(marker, 10, 64)
+		var latestIntent, latestReply int64
+		if err := sc.pg.QueryRow(`SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0)
+FROM exploration_nodes WHERE exploration_id=$1 AND kind='intent'`, task.ExpID).Scan(&latestIntent); err != nil {
+			continue
+		}
+		if err := sc.pg.QueryRow(`SELECT COALESCE(EXTRACT(EPOCH FROM MAX(created_at))::bigint, 0)
+FROM activity WHERE exploration_id=$1 AND worker='mainagent' AND kind='user' AND (summary LIKE $2 OR summary LIKE $3)`,
+			task.ExpID, fmt.Sprintf("CODEX_HELP_%d:%%", id), fmt.Sprintf("Codex%%#%d:%%", id)).Scan(&latestReply); err != nil {
+			continue
+		}
+		retryKey := fmt.Sprintf("codex_help_retries_%d", id)
+		retryText, err := sc.pg.GetSchedState(retryKey)
+		if err != nil {
+			continue
+		}
+		retries, _ := strconv.Atoi(retryText)
+		send, retry := codexHelpShouldRequest(now, requestedAt, latestIntent, latestReply, retries)
+		if !send {
+			continue
 		}
 		// Never include task data, target addresses or secrets in the CLI
 		// argument. The Codex assistant reads the task record itself.
-		message := codexHelpRequestMessage(id)
+		message := codexHelpRequestMessage(id, filepath.Join(filepath.Dir(sc.s.m.dir), "scripts", "send-codex-help.ps1"))
+		if retry {
+			message = fmt.Sprintf("이전 도움 요청이 ARTEX 채팅에 전달되지 않아 재요청합니다 (%d/2). ", retries+1) + message
+		}
 		if err := queueCodexHelp(cfg, message); err != nil {
 			log.Printf("[codex-help] task=%d queue failed: %v", id, err)
 			continue
@@ -233,6 +296,11 @@ FROM exploration_nodes WHERE exploration_id=$1 AND kind='intent'`, task.ExpID).S
 		if err := sc.pg.SetSchedState(key, strconv.FormatInt(now, 10)); err != nil {
 			log.Printf("[codex-help] task=%d marker failed: %v", id, err)
 			continue
+		}
+		if retry {
+			_ = sc.pg.SetSchedState(retryKey, strconv.Itoa(retries+1))
+		} else {
+			_ = sc.pg.SetSchedState(retryKey, "0")
 		}
 		log.Printf("[codex-help] task=%d queued to existing Codex conversation", id)
 	}

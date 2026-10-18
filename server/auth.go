@@ -120,6 +120,10 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
+		if s.validCodexHelpReply(r) {
+			h.ServeHTTP(w, r)
+			return
+		}
 		tok := extractToken(r)
 		if tok == "" {
 			writeErr(w, 401, authErrUnauthorized)

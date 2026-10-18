@@ -9,8 +9,11 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $configPath = Join-Path $repoRoot 'data\codex-help.json'
 if (-not $ThreadId -and -not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return }
 
-if (-not $ThreadId) {
+$existing = $null
+if (Test-Path -LiteralPath $configPath -PathType Leaf) {
     $existing = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+}
+if (-not $ThreadId) {
     $ThreadId = [string]$existing.thread_id
 }
 if ($ThreadId -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') {
@@ -29,7 +32,14 @@ if (Test-Path -LiteralPath $binRoot -PathType Container) {
 $cliPath = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
 if (-not $cliPath) { throw 'Codex CLI was not found; help connection cannot be enabled.' }
 
-$config = @{ thread_id = $ThreadId; cli_path = [IO.Path]::GetFullPath($cliPath) } | ConvertTo-Json -Compress
+$replyKey = if ($existing -and $existing.reply_key) { [string]$existing.reply_key } else { '' }
+if ($replyKey -notmatch '^[A-Za-z0-9_-]{43}$') {
+    $bytes = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    $replyKey = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+}
+$config = @{ thread_id = $ThreadId; cli_path = [IO.Path]::GetFullPath($cliPath); reply_key = $replyKey } | ConvertTo-Json -Compress
 $dir = Split-Path $configPath -Parent
 if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir | Out-Null }
 [IO.File]::WriteAllText($configPath, $config + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))

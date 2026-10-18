@@ -132,4 +132,14 @@ try {
     $key = $null
 }
 if ($code -ne 405) { throw "Running bridge rejected its current profile key (HTTP $code)." }
+Start-Sleep -Seconds 2
+$runningServer = @(Get-CimInstance Win32_Process -Filter "name='artex.exe'" |
+    Where-Object { Same-Path $_.ExecutablePath $serverExe })
+if ($runningServer.Count -ne 1) { throw 'ARTEX did not remain running after startup.' }
+try {
+    $health = Invoke-WebRequest -Uri 'http://127.0.0.1:8787/api/health' -UseBasicParsing -TimeoutSec 5
+    if ($health.StatusCode -ne 200) { throw "ARTEX health returned HTTP $($health.StatusCode)." }
+} catch {
+    throw "ARTEX health check failed after restart: $($_.Exception.Message)"
+}
 Write-Host '[ARTEX-KO] Full restart complete. Bridge authentication passed; http://127.0.0.1:8787'
