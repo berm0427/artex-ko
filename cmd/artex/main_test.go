@@ -52,6 +52,19 @@ func TestPrintBannerLocalized(t *testing.T) {
 	}
 }
 
+func TestDisplayVersion(t *testing.T) {
+	previous := version
+	t.Cleanup(func() { version = previous })
+	version = "v2.2.0"
+	if got := displayVersion(); got != version {
+		t.Fatalf("release version = %q, want %q", got, version)
+	}
+	version = "dev"
+	if got := displayVersion(); got == "dev" || got == "" {
+		t.Fatalf("local version = %q, want a non-empty build label", got)
+	}
+}
+
 // captureStdout redirects os.Stdout for the duration of fn and returns whatever
 // fn wrote. printBanner uses fmt.Print*, which resolves os.Stdout at call time,
 // so swapping it here captures the banner.

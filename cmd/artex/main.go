@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -23,8 +24,35 @@ import (
 )
 
 // version is the build version, injected at release time via
-// -ldflags "-X main.version=<tag>". Defaults to "dev" for local builds.
+// -ldflags "-X main.version=<tag>". Local builds display their Git revision.
 var version = "dev"
+
+func displayVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "local"
+	}
+	var revision, modified string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value
+		}
+	}
+	if len(revision) < 7 {
+		return "local"
+	}
+	label := "local-" + revision[:7]
+	if modified == "true" {
+		label += "+dirty"
+	}
+	return label
+}
 
 const banner = `
     _    ____ _____ _______  __
@@ -39,7 +67,7 @@ func printBanner(addr string) {
 	fmt.Print(banner)
 	fmt.Println("  AI 자율 침투 테스트 시스템")
 	fmt.Printf("  버전 %s  ·  %s/%s  ·  %s  ·  수신 대기 %s\n\n",
-		version, runtime.GOOS, runtime.GOARCH, runtime.Version(), addr)
+		displayVersion(), runtime.GOOS, runtime.GOARCH, runtime.Version(), addr)
 }
 
 // main only maps run's result onto the process exit code. The exit code is part
@@ -60,7 +88,7 @@ func run() int {
 
 	// hand the build version to the server package so GET /api/health can report it
 	// to the frontend top bar.
-	server.BuildVersion = version
+	server.BuildVersion = displayVersion()
 
 	printBanner(*addr)
 
@@ -120,7 +148,7 @@ func run() int {
 	}
 
 	go func() {
-		log.Printf("ARTEX %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
+		log.Printf("ARTEX %s backend listening on %s (data=%s, workers=%d)", displayVersion(), *addr, *dataDir, mgr.Workers())
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}
