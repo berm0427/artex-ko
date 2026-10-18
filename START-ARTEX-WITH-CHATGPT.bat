@@ -20,5 +20,21 @@ if errorlevel 1 (
 )
 
 echo [ARTEX-KO] ChatGPT bridge ready. Starting ARTEX...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\connect-codex-help.ps1"
+if errorlevel 1 (
+  echo [ARTEX-KO] Codex help connection failed. ARTEX was not started. 1>&2
+  exit /b 1
+)
+set "ARTEX_KO_LAUNCHER_CHECK=1"
+call "%~dp0START-ARTEX-KO.cmd"
+if errorlevel 1 exit /b 1
+set "ARTEX_KO_LAUNCHER_CHECK="
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\sync-chatgpt-bridge-profile.ps1"
+if errorlevel 1 (
+  echo [ARTEX-KO] ChatGPT bridge profile sync failed. ARTEX was not started. 1>&2
+  exit /b 1
+)
+
 call "%~dp0START-ARTEX-KO.cmd"
 exit /b %ERRORLEVEL%

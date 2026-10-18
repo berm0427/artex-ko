@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +53,8 @@ func (sc *Scheduler) Run(ctx context.Context) {
 		case <-t.C:
 			sc.s.reconcileConcurrency() // 并发上限:有空位就把排队任务补位启动
 			sc.step()
+			sc.codexHelpStep()
+			sc.autoContinueStep()
 		}
 	}
 }
@@ -128,6 +131,142 @@ func (sc *Scheduler) step() {
 	sc.fireTaskTimeouts(triggers)
 	sc.fireToolCalls(triggers)
 	sc.fireTaskCreates(triggers)
+}
+
+// autoContinueStep hands a genuinely idle, unfinished task to a new ARTEX task.
+// The successor inherits the source task's evidence, but must form its own next
+// experiment. This is intentionally bounded: a stalled strategy must not create
+// an unending series of costly model calls.
+func (sc *Scheduler) autoContinueStep() {
+	if os.Getenv("ARTEX_AUTO_CONTINUE") != "1" {
+		return
+	}
+	now := time.Now().Unix()
+	if now%30 >= int64(sc.tick/time.Second) {
+		return
+	}
+	tasks := sc.s.m.List()
+	last, err := sc.pg.LastActivityAll()
+	if err != nil {
+		log.Printf("[auto-continue] 활동 조회 실패: %v", err)
+		return
+	}
+	children := make(map[int64]bool)
+	byID := make(map[int64]*Task)
+	for _, task := range tasks {
+		id, err := strconv.ParseInt(task.ID, 10, 64)
+		if err != nil {
+			continue
+		}
+		byID[id] = task
+		for _, source := range task.lifecycleSnapshot().SourceTaskIDs {
+			children[source] = true
+		}
+	}
+	// Do not revive an entire backlog when this feature is first enabled. The
+	// newest task at activation (and tasks created later) are in scope.
+	floorText, err := sc.pg.GetSchedState("auto_continue_first_task")
+	if err != nil {
+		return
+	}
+	if floorText == "" {
+		var newest int64
+		for id := range byID {
+			if id > newest {
+				newest = id
+			}
+		}
+		floorText = strconv.FormatInt(newest, 10)
+		if err := sc.pg.SetSchedState("auto_continue_first_task", floorText); err != nil {
+			return
+		}
+	}
+	floor, _ := strconv.ParseInt(floorText, 10, 64)
+	for id, task := range byID {
+		if id < floor {
+			continue
+		}
+		state := task.lifecycleSnapshot()
+		if children[id] || state.Paused || state.Queued || isTerminalStatus(state.Status) || sc.s.engine.IsDeleting(task.ID) {
+			continue
+		}
+		if sc.s.engine.ActiveLLMCalls(task.ID) > 0 {
+			continue
+		}
+		active, err := task.Store.HasActiveIntent()
+		if err != nil || active {
+			continue
+		}
+		open, err := task.Store.HasOpenGoal()
+		if err != nil || !open {
+			continue
+		}
+		// A provider/DNS outage is not a failed exploration strategy. Keep the
+		// original task instead of cloning it into a second broken model call.
+		if _, kind := sc.taskModelFailure(id); kind != "" {
+			continue
+		}
+		latest := last[task.ExpID]
+		if latest < task.CreatedAt {
+			latest = task.CreatedAt
+		}
+		if latest == 0 || now-latest < 60 {
+			continue
+		}
+		// Give the connected Codex conversation time to respond before
+		// spawning a successor that would obscure the original task.
+		if requested, _ := sc.pg.GetSchedState(fmt.Sprintf("codex_help_requested_%d", id)); requested != "" {
+			requestedAt, _ := strconv.ParseInt(requested, 10, 64)
+			if requestedAt > 0 && now-requestedAt < 600 {
+				continue
+			}
+		}
+		depth := 0
+		cursor := task
+		for len(cursor.lifecycleSnapshot().SourceTaskIDs) == 1 {
+			parentID := cursor.lifecycleSnapshot().SourceTaskIDs[0]
+			parent := byID[parentID]
+			if parent == nil || depth >= 2 {
+				break
+			}
+			depth++
+			cursor = parent
+		}
+		if depth >= 2 {
+			continue
+		}
+		key := fmt.Sprintf("auto_continue_source_%d", id)
+		// A connected Codex conversation gets the first chance to review a
+		// stalled task. Without this grace period, the 60-second successor
+		// would be created before codexHelpStep's 180-second request.
+		if _, helpErr := sc.codexHelpConfig(); helpErr == nil && now-task.CreatedAt < 240 {
+			continue
+		}
+		marker, err := sc.pg.GetSchedState(key)
+		if err != nil || marker != "" {
+			continue
+		}
+		if err := sc.pg.SetSchedState(key, "pending"); err != nil {
+			continue
+		}
+		prompt := fmt.Sprintf("원본 작업 #%d의 열린 목표를 이어받는다. 이전 기록을 검토하고 이미 실패한 입력과 반복 실험은 피하라. 새로운 가설과 구별되는 실험·성공 판정 기준을 먼저 정한 뒤 스스로 실행하라. 성공은 실제 대상 응답의 증거로만 판정하고, 새 접근이 없으면 한계를 명시하라.\n\n원본 설명: %s", id, task.Description)
+		child, err := sc.s.m.CreateTaskWithOptions(prompt, task.Goal, db.TaskCreateOptions{
+			Name: fmt.Sprintf("자동 후속 %d/2 · #%d", depth+1, id), SourceTaskIDs: []int64{id},
+			LLMProfileIDs: append([]int64(nil), task.LLMProfileIDs...), TimeoutSeconds: task.TimeoutSeconds,
+			PlanHeartbeatSeconds: task.PlanHeartbeatSeconds, CoverageEnabled: &task.CoverageEnabled,
+		})
+		if err != nil {
+			_ = sc.pg.SetSchedState(key, "")
+			log.Printf("[auto-continue] 작업 #%d 후속 생성 실패: %v", id, err)
+			continue
+		}
+		_ = sc.pg.SetSchedState(key, child.ID)
+		if _, err := sc.s.applyTaskControl(task, "pause"); err != nil {
+			log.Printf("[auto-continue] 작업 #%d 일시정지 실패: %v", id, err)
+		}
+		sc.s.launchTask(child, prompt, false)
+		log.Printf("[auto-continue] 작업 #%d → #%s", id, child.ID)
+	}
 }
 
 // fireIntervals fires triggers whose interval has elapsed since last_fire.
