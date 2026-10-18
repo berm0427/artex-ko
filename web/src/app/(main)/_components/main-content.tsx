@@ -8,6 +8,7 @@ import { useTranslations } from "next-intl";
 
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { APP_CONFIG } from "@/config/app-config";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,8 @@ export function MainContent({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const t = useTranslations("header");
   const [version, setVersion] = useState("");
+  const release = APP_CONFIG.version.match(/^(\d+)\.(\d+)/);
+  const displayVersion = release ? `v${release[1]}.${release[2]}` : `v${APP_CONFIG.version}`;
 
   useEffect(() => {
     api
@@ -69,8 +72,11 @@ export function MainContent({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-center gap-2">
             {version && (
-              <span className="font-medium text-muted-foreground text-xs tabular-nums">
-                {t("version", { version })}
+              <span
+                className="rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 font-semibold text-primary text-xs tabular-nums"
+                title={t("version", { version })}
+              >
+                ARTEX {displayVersion}
               </span>
             )}
             <UpdateBadge />
