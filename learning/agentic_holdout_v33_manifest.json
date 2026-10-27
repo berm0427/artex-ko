@@ -1,0 +1,24 @@
+{
+  "version": 33,
+  "purpose": "unseen holdout for v32 compaction+action failure modes",
+  "split_rule": "Google CTF 2025 quals (holdout per google_ctf_2024_2025_manifest.json)",
+  "source_revision": "f683ff991cac26f7673d2f2de5ac9d226b95b847",
+  "input_only": true,
+  "grading": "mechanical, see eval_agentic_v33.py",
+  "safety": [
+    "no flag values",
+    "no target strings",
+    "static-source recon only"
+  ],
+  "counts": {
+    "total": 6,
+    "compaction": 3,
+    "action": 3
+  },
+  "cases": [
+    "google-ctf-2025-pwn-multiarch-2",
+    "google-ctf-2025-rev-cgb",
+    "google-ctf-2025-web-sourceless"
+  ],
+  "sha256": "8580034b98aa30e9fff1cfa6f5f42df027a7e4a98e3605d294b7be2159c79096"
+}
