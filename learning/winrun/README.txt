@@ -21,8 +21,13 @@ wsl.exe를 통해 안에서 venv 파이썬을 호출합니다.
                       health: http://127.0.0.1:12354/health
 4-eval-v34.bat        v34 서빙+홀드아웃 채점+종료 → learning\eval_v33_candidate_v34.jsonl
 5-eval-baseline-v5.bat 비교용 baseline 채점 → learning\eval_v33_baseline_v5.jsonl
+6-serve-v34-artex.bat  ARTEX 배선용 영속 서빙 (0.0.0.0:12362, model artex-agentic-v34).
+                      ARTEX 프로필 "ARTEX v34 C"가 이 서버를 씀. 창을 열어둔 채 사용.
+                      (3-serve-v34는 로컬 평가용 127.0.0.1:12354 — 용도가 다름)
+                      * 사전: 관리자 netsh portproxy 127.0.0.1:12362 -> WSL_IP:12362 필요
 
 보통은 2 → 4(→ 5로 비교)만 돌리면 됩니다. 데이터를 바꿨으면 1부터.
+ARTEX에서 v34를 실제로 쓰려면 6을 띄운 채 ARTEX에서 "ARTEX v34 C" 프로필을 선택합니다.
 
 채점 기준
 ---------
