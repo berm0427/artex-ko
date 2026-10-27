@@ -126,6 +126,78 @@ CASES = [
         ],
         "facts": "실행 명령 형식 확인됨. 아직 실제 실행·관찰은 안 함.",
     },
+    {
+        "case_id": "google-ctf-2025-web-inspector-gadget",
+        "goal": "제공된 로컬 웹앱의 정적 자산과 클라이언트 스크립트 구성을 파악한다",
+        "transcript": [
+            ("USER", "격리 로컬 환경에서 제공된 웹앱의 클라이언트 측 구성을 정적으로만 분석하라. 요청 금지."),
+            ("ASSISTANT", "목표를 '정적 자산과 번들 스크립트의 진입 로직 식별'로 설정."),
+            ("ASSISTANT(tool list_files)", "index.html, static/ 아래 번들 js 다수 확인."),
+            ("ASSISTANT(tool Read index.html)", "번들 스크립트를 로드하고 초기화 함수를 호출함."),
+            ("ASSISTANT", "다음은 번들 스크립트의 초기화 경로를 정적으로 읽을 계획."),
+        ],
+        "facts": "index.html이 번들 스크립트를 로드·초기화. 아직 번들 내부는 안 읽음.",
+    },
+    {
+        "case_id": "google-ctf-2025-pwn-the-classic-notes-app",
+        "goal": "제공된 로컬 바이너리의 메뉴 입력 처리 구조를 정적 소스로 파악한다",
+        "transcript": [
+            ("USER", "제공된 로컬 바이너리의 입력 처리 구조를 정적 소스로만 분석하라."),
+            ("ASSISTANT", "목표를 '메뉴 루프와 각 선택지의 처리 함수 식별'로 설정."),
+            ("ASSISTANT(tool list_files)", "ctf.c, Makefile 확인."),
+            ("ASSISTANT(tool Read ctf.c head)", "정수 메뉴 입력을 읽어 분기하는 루프 확인."),
+            ("ASSISTANT", "다음은 각 메뉴 선택지가 부르는 함수와 입력 경계를 확인할 계획."),
+        ],
+        "facts": "메뉴 입력 분기 루프 확인. 각 선택지 함수·입력 경계는 아직 미확인.",
+    },
+    {
+        "case_id": "google-ctf-2025-rev-asteroids-redux",
+        "goal": "제공된 로컬 바이너리의 입력 검증 분기를 정적 소스로 파악한다",
+        "transcript": [
+            ("USER", "제공된 로컬 바이너리가 입력을 어떻게 검증하는지 정적 소스로만 분석하라."),
+            ("ASSISTANT", "목표를 '입력 비교 루틴과 성공 분기 식별'로 설정."),
+            ("ASSISTANT(tool list_files)", "chal.c 확인."),
+            ("ASSISTANT(tool Read chal.c head)", "입력을 받아 내부 상태와 비교하는 검증 함수 존재."),
+            ("ASSISTANT", "다음은 검증 함수의 비교 기준과 성공 조건을 확인할 계획."),
+        ],
+        "facts": "입력 검증 함수 존재 확인. 비교 기준·성공 조건은 아직 미확인.",
+    },
+    {
+        "case_id": "google-ctf-2025-crypto-filtermaze",
+        "goal": "제공된 로컬 챌린지 스크립트의 입출력 프로토콜을 정적으로 파악한다",
+        "transcript": [
+            ("USER", "제공된 로컬 챌린지 스크립트의 입출력 규약을 정적 소스로만 분석하라. 서버 접속 금지."),
+            ("ASSISTANT", "목표를 '스크립트가 받는 입력 형식과 응답 조건 식별'로 설정."),
+            ("ASSISTANT(tool list_files)", "challenge.py 확인."),
+            ("ASSISTANT(tool Read challenge.py head)", "표준입력으로 쿼리를 받아 조건부로 응답하는 루프 확인."),
+            ("ASSISTANT", "다음은 응답을 가르는 조건식과 상태 변수를 확인할 계획."),
+        ],
+        "facts": "stdin 쿼리 루프 확인. 응답 조건식·상태 변수는 아직 미확인.",
+    },
+    {
+        "case_id": "google-ctf-2025-misc-fishmaze",
+        "goal": "제공된 로컬 서비스 스크립트의 명령 처리 경로를 정적으로 파악한다",
+        "transcript": [
+            ("USER", "제공된 로컬 서비스 스크립트가 명령을 어떻게 처리하는지 정적 소스로만 분석하라."),
+            ("ASSISTANT", "목표를 '허용 명령 집합과 디스패치 방식 식별'로 설정."),
+            ("ASSISTANT(tool list_files)", "app.py 확인."),
+            ("ASSISTANT(tool Read app.py head)", "문자열 명령을 받아 분기 처리하는 디스패처 확인."),
+            ("ASSISTANT", "다음은 허용 명령 목록과 기본 분기 처리를 확인할 계획."),
+        ],
+        "facts": "명령 디스패처 존재 확인. 허용 명령 집합·기본 분기는 아직 미확인.",
+    },
+    {
+        "case_id": "google-ctf-2025-web-mythos-python",
+        "goal": "제공된 로컬 파이썬 웹앱의 템플릿 렌더링 경로를 정적으로 파악한다",
+        "transcript": [
+            ("USER", "제공된 로컬 파이썬 웹앱의 템플릿 렌더링 경로를 정적 소스로만 분석하라. 요청 금지."),
+            ("ASSISTANT", "목표를 '사용자 입력이 템플릿으로 가는 경로 식별'로 설정."),
+            ("ASSISTANT(tool list_files)", "app.py, templates/ 확인."),
+            ("ASSISTANT(tool Read app.py head)", "요청 파라미터를 받아 템플릿을 렌더링하는 뷰 함수 확인."),
+            ("ASSISTANT", "다음은 파라미터가 렌더링에 쓰이는 방식과 이스케이프 여부를 확인할 계획."),
+        ],
+        "facts": "파라미터→템플릿 렌더링 뷰 확인. 이스케이프 처리 여부는 아직 미확인.",
+    },
 ]
 
 

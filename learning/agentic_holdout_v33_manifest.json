@@ -11,14 +11,20 @@
     "static-source recon only"
   ],
   "counts": {
-    "total": 6,
-    "compaction": 3,
-    "action": 3
+    "total": 18,
+    "compaction": 9,
+    "action": 9
   },
   "cases": [
+    "google-ctf-2025-crypto-filtermaze",
+    "google-ctf-2025-misc-fishmaze",
     "google-ctf-2025-pwn-multiarch-2",
+    "google-ctf-2025-pwn-the-classic-notes-app",
+    "google-ctf-2025-rev-asteroids-redux",
     "google-ctf-2025-rev-cgb",
+    "google-ctf-2025-web-inspector-gadget",
+    "google-ctf-2025-web-mythos-python",
     "google-ctf-2025-web-sourceless"
   ],
-  "sha256": "8580034b98aa30e9fff1cfa6f5f42df027a7e4a98e3605d294b7be2159c79096"
+  "sha256": "5b7bf7cca19334f1d22962abfb081d57c980b6c28fa868637a5561389d669be1"
 }

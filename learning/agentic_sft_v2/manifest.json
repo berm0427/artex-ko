@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "source": "synthetic_agentic_v2",
+  "derived_from": "synthetic_agentic_v1",
+  "purpose": "v1 plus varied non-repetitive compaction to reduce analysis-block looping",
+  "counts": {
+    "train": 14,
+    "compaction": 8,
+    "action": 6
+  },
+  "rules": [
+    "no evaluation-set items",
+    "no flag values",
+    "compaction analysis must be short and non-repetitive",
+    "short examples (<=768 tokens target)"
+  ],
+  "files": {
+    "train.jsonl": "1d37e28f5a8b8609c1f8dc16cc23407d7a64d9dcb758305916136c341a614524"
+  }
+}
