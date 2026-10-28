@@ -1464,6 +1464,16 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 				return actool.Errorf("취약점 미등록: 정상 HTTP 200, 표준 응답 헤더 또는 공개 페이지 내용만으로 정보 노출 취약점을 입증할 수 없습니다. 관찰 결과는 record_fact로 기록하고, 실제 비인가 접근이나 민감 정보 노출의 요청·응답 차이를 확인한 경우에만 report_finding을 사용하세요"), nil
 			}
 			a.Evidence += fmt.Sprintf("\n[검증된 도구 출력 #%d] %s", stepID, strings.TrimSpace(a.EvidenceQuote))
+			// 환각 방지 가드: 능동 공격 결과(RCE·셸·flag 누출·메모리 손상)를 주장하는데
+			// 이 의도에 성공한 실행/네트워크 활동이 하나도 없으면 등록을 거부한다.
+			// evidence_quote가 정적 Read 한 줄만 인용해도 통과하던 구멍을 막는다.
+			if t.ownerNode > 0 {
+				if acts, _, actErr := t.ts.ActivityPage(db.ActivitySessionFilter{NodeID: &intentID}, 0, 600); actErr == nil {
+					if reason, fabricated := detectFabricatedActiveFinding(a.Severity, a.Summary, acts); fabricated {
+						return actool.Errorf("취약점 미등록: " + reason + " 실제로 대상에 연결·실행해 응답을 확인한 뒤 그 성공한 도구 출력을 근거로 다시 보고하세요. 관찰·가설은 record_fact로 남기세요."), nil
+					}
+				}
+			}
 		} else if t.worker == "human" {
 			if deniedAccessEvidence(a.EvidenceQuote) {
 				return actool.Errorf("취약점 미등록: 인용한 응답은 접근 거부 또는 파일 없음입니다"), nil
