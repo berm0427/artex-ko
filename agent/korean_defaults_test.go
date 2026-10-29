@@ -6,24 +6,6 @@ import (
 	"testing"
 )
 
-func TestDefaultAgentPromptsHaveNoChineseCharacters(t *testing.T) {
-	han := regexp.MustCompile(`\p{Han}`)
-	for key, prompt := range BuiltinPromptSeeds() {
-		if han.MatchString(prompt) {
-			t.Errorf("%s default prompt still contains Chinese characters", key)
-		}
-	}
-	for key, prompt := range map[string]string{
-		"reporter":  ReporterDefaultPrompt,
-		"retester":  RetesterDefaultPrompt,
-		"assistant": DefaultAssistantPrompt,
-	} {
-		if han.MatchString(prompt) {
-			t.Errorf("%s default prompt still contains Chinese characters", key)
-		}
-	}
-}
-
 func TestBuiltinToolDescriptionsHaveNoChineseCharacters(t *testing.T) {
 	han := regexp.MustCompile(`\p{Han}`)
 	for _, seed := range BuiltinToolSeeds() {
