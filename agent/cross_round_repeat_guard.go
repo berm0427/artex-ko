@@ -103,22 +103,34 @@ func crossRoundRepeatStall(ts *db.ExplorationStore) (string, bool) {
 // pools blind inventory polls across tools, and flag any group whose most recent
 // crossRoundRepeatThreshold calls all occurred after the last SUCCESSFUL
 // evidence-recording call anywhere in the task. Two things keep it honest:
-//   - Only a non-errored evidence call (add_intent/record_fact/... with IsError==false)
-//     counts as progress. A rejected duplicate add_intent is NOT progress, so it does
-//     not reset the streak; instead it falls through and is counted as a repeated
-//     non-productive planner call in its own summary group.
+//   - Only a successful evidence call counts as progress, judged by its tool_result
+//     row (not the tool_use row, whose IsError is always false). A rejected duplicate
+//     add_intent is NOT progress, so it does not reset the streak; it falls through and
+//     is counted as a repeated non-productive planner call.
 //   - Evidence from a worker counts, so a planner re-reading while a worker makes
 //     progress is not flagged.
 func detectCrossRoundStall(activities []db.Activity) (string, bool) {
+	// A tool call leaves two activity rows sharing a ToolUseID: a "tool_use" row (its
+	// IsError is always false) and a "tool_result" row (IsError==true iff the call was
+	// rejected/failed). The duplicate-intent rejection is on the result row, so collect
+	// the rejected ToolUseIDs first; an evidence call whose result errored is not progress.
+	rejected := map[string]bool{}
+	for _, a := range activities {
+		if a.Kind == "tool_result" && a.IsError && a.ToolUseID != "" {
+			rejected[a.ToolUseID] = true
+		}
+	}
 	var lastEvidenceID int64
 	groups := map[string][]crossRoundCall{}
 	for _, a := range activities {
 		if a.Kind != "tool_use" || a.Tool == "" {
 			continue
 		}
-		// Only a SUCCESSFUL evidence call counts as progress; a rejected one falls
-		// through to be grouped as a repeated non-productive planner call.
-		if crossRoundEvidenceTools[a.Tool] && !a.IsError {
+		// tool_use rows always have IsError==false, so judge success by whether this
+		// call's RESULT was rejected. Only a successful evidence call counts as progress;
+		// a rejected one falls through to be grouped as a repeated non-productive call.
+		wasRejected := a.ToolUseID != "" && rejected[a.ToolUseID]
+		if crossRoundEvidenceTools[a.Tool] && !wasRejected {
 			if a.ID > lastEvidenceID {
 				lastEvidenceID = a.ID
 			}

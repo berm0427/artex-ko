@@ -11,29 +11,31 @@ func tu(id int64, worker, tool, summary string) db.Activity {
 	return db.Activity{ID: id, Worker: worker, Kind: "tool_use", Tool: tool, Summary: summary}
 }
 
-// tuErr is tu with IsError set — a rejected/failed tool call.
-func tuErr(id int64, worker, tool, summary string) db.Activity {
+// tuid is tu with a ToolUseID, so its outcome can be paired with a tool_result row.
+func tuid(id int64, worker, tool, summary, useID string) db.Activity {
 	a := tu(id, worker, tool, summary)
-	a.IsError = true
+	a.ToolUseID = useID
 	return a
 }
 
+// trErr is the rejected/failed result row (tool_result, is_error=true) for a call.
+func trErr(id int64, worker, tool, useID string) db.Activity {
+	return db.Activity{ID: id, Worker: worker, Kind: "tool_result", Tool: tool, IsError: true, ToolUseID: useID}
+}
+
 func TestDetectCrossRoundStall(t *testing.T) {
-	const li = `list_intents {"before":0,"limit":20}`
-	cases := []struct {
+	tests := []struct {
 		name       string
 		activities []db.Activity
 		wantTool   string
 		wantStall  bool
 	}{
 		{
-			name: "three identical planner reads, no evidence after streak start → stall",
+			name: "three identical planner reads → stall",
 			activities: []db.Activity{
-				tu(1, "planner", "add_intent", `add_intent {...}`), // evidence BEFORE the streak
-				tu(2, "planner", "list_intents", li),
-				tu(4, "planner", "graph_overview", `graph_overview {}`),
-				tu(6, "planner", "list_intents", li),
-				tu(8, "planner", "list_intents", li),
+				tu(2, "planner", "list_intents", `list_intents {}`),
+				tu(4, "planner", "list_intents", `list_intents {}`),
+				tu(6, "planner", "list_intents", `list_intents {}`),
 			},
 			wantTool:  "list_intents",
 			wantStall: true,
@@ -41,81 +43,88 @@ func TestDetectCrossRoundStall(t *testing.T) {
 		{
 			name: "evidence lands within the streak → not a stall",
 			activities: []db.Activity{
-				tu(2, "planner", "list_intents", li),
-				tu(4, "planner", "list_intents", li),
-				tu(6, "planner", "record_fact", `record_fact {...}`), // new evidence after reads began
-				tu(8, "planner", "list_intents", li),
+				tu(2, "planner", "list_intents", `list_intents {}`),
+				tu(4, "planner", "list_intents", `list_intents {}`),
+				tu(5, "worker", "record_fact", `record_fact {"summary":"new fact"}`),
+				tu(6, "planner", "list_intents", `list_intents {}`),
 			},
-			wantStall: false,
 		},
 		{
 			name: "below threshold → not a stall",
 			activities: []db.Activity{
-				tu(2, "planner", "list_intents", li),
-				tu(4, "planner", "list_intents", li),
+				tu(2, "planner", "list_intents", `list_intents {}`),
+				tu(4, "planner", "list_intents", `list_intents {}`),
 			},
-			wantStall: false,
 		},
 		{
 			name: "worker repeats are out of planner scope → not a stall",
 			activities: []db.Activity{
-				tu(2, "work#1", "list_assets", `list_assets {"dsl":"type=ip"}`),
-				tu(4, "work#1", "list_assets", `list_assets {"dsl":"type=ip"}`),
-				tu(6, "work#1", "list_assets", `list_assets {"dsl":"type=ip"}`),
+				tu(2, "worker", "list_intents", `list_intents {}`),
+				tu(4, "worker", "list_intents", `list_intents {}`),
+				tu(6, "worker", "list_intents", `list_intents {}`),
 			},
-			wantStall: false,
 		},
 		{
 			name: "different arguments each time → not identical → not a stall",
 			activities: []db.Activity{
-				tu(2, "planner", "list_intents", `list_intents {"before":0}`),
-				tu(4, "planner", "list_intents", `list_intents {"before":40}`),
-				tu(6, "planner", "list_intents", `list_intents {"before":80}`),
+				tu(2, "planner", "list_intents", `list_intents {"after":10}`),
+				tu(4, "planner", "list_intents", `list_intents {"after":20}`),
+				tu(6, "planner", "list_intents", `list_intents {"after":30}`),
 			},
-			wantStall: false,
-		},
-		{
-			name: "rejected duplicate add_intent does not reset streak → stall",
-			activities: []db.Activity{
-				tu(1, "planner", "add_intent", `add_intent {"title":"initial"}`), // successful evidence
-				tu(2, "planner", "list_intents", `list_intents {"before":0,"limit":20}`),
-				tu(4, "planner", "list_facts", `list_facts {}`),
-				tuErr(6, "planner", "add_intent", `add_intent {"title":"initial"}`), // rejected dup: must NOT reset
-				tu(8, "planner", "list_intents", `list_intents {"before":0,"limit":20}`),
-				tu(10, "planner", "list_facts", `list_facts {}`),
-			},
-			wantTool:  "list_facts",
-			wantStall: true,
 		},
 		{
 			name: "successful add_intent resets streak → not a stall",
 			activities: []db.Activity{
-				tu(2, "planner", "list_intents", `list_intents {"before":0,"limit":20}`),
-				tu(4, "planner", "list_facts", `list_facts {}`),
-				tu(6, "planner", "add_intent", `add_intent {"title":"new"}`), // real progress within streak
-				tu(8, "planner", "list_intents", `list_intents {"before":0,"limit":20}`),
+				tu(2, "planner", "list_intents", `list_intents {}`),
+				tu(4, "planner", "list_intents", `list_intents {}`),
+				tu(6, "planner", "add_intent", `add_intent {"summary":"new"}`),
+				tu(8, "planner", "list_intents", `list_intents {}`),
 			},
-			wantStall: false,
 		},
 		{
 			name: "alternating blind inventory polls across tools → stall",
 			activities: []db.Activity{
-				tu(2, "planner", "list_intents", `list_intents {"before":0,"limit":20}`),
+				tu(2, "planner", "list_intents", `list_intents {}`),
 				tu(4, "planner", "list_facts", `list_facts {}`),
 				tu(6, "planner", "list_findings", `list_findings {}`),
 			},
 			wantTool:  "list_findings",
 			wantStall: true,
 		},
+		{
+			name: "rejected duplicate add_intent does not reset streak → stall",
+			activities: []db.Activity{
+				tu(1, "planner", "add_intent", `add_intent {"summary":"a"}`),
+				tu(2, "planner", "list_intents", `list_intents {}`),
+				tu(4, "planner", "list_facts", `list_facts {}`),
+				tuid(6, "planner", "add_intent", `add_intent {"summary":"dup"}`, "call_6"),
+				trErr(7, "planner", "add_intent", "call_6"),
+				tu(8, "planner", "list_intents", `list_intents {}`),
+				tu(10, "planner", "list_facts", `list_facts {}`),
+			},
+			wantTool:  "list_facts",
+			wantStall: true,
+		},
+		{
+			name: "successful evidence has non-error tool_result → still resets → not a stall",
+			activities: []db.Activity{
+				tu(2, "planner", "list_intents", `list_intents {}`),
+				tu(4, "planner", "list_facts", `list_facts {}`),
+				tuid(6, "planner", "add_intent", `add_intent {"summary":"new"}`, "call_6"),
+				{ID: 7, Worker: "planner", Kind: "tool_result", Tool: "add_intent", IsError: false, ToolUseID: "call_6"},
+				tu(8, "planner", "list_intents", `list_intents {}`),
+			},
+		},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			tool, stall := detectCrossRoundStall(c.activities)
-			if stall != c.wantStall {
-				t.Fatalf("stall = %v, want %v (tool=%q)", stall, c.wantStall, tool)
-			}
-			if c.wantStall && tool != c.wantTool {
-				t.Fatalf("tool = %q, want %q", tool, c.wantTool)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTool, gotStall := detectCrossRoundStall(tt.activities)
+			if gotTool != tt.wantTool || gotStall != tt.wantStall {
+				t.Fatalf(
+					"detectCrossRoundStall() = (%q, %v), want (%q, %v)",
+					gotTool, gotStall, tt.wantTool, tt.wantStall,
+				)
 			}
 		})
 	}
