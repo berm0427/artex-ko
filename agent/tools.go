@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/db"
 	acperm "github.com/Autumn-27/norma/permission"
@@ -56,15 +57,20 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 // ToolSet exposes the PG-backed dual graph (asset + exploration) to an LLM agent.
 // One ToolSet is created per planner/worker run; per-run signals live here.
 type ToolSet struct {
-	tcpMu           sync.Mutex
-	tcpConn         net.Conn
-	tcpExpiry       *time.Timer
-	findingRecorder FindingRecorder
-	as              *db.AssetStore   // asset store (optional; nil = asset tools not available)
-	cs              *db.CompanyStore // company store (optional)
-	ts              *db.ExplorationStore
-	worker          string
-	taskID          int64 // PG tasks.id; 0 when unknown (tests / orchestrator cross-task reads)
+	intentGuidance    string                             // authenticated Codex help for intents created by this chat turn
+	reviewedIntents   map[string]ReviewedIntentCandidate // nil: legacy free-form path
+	reviewedDecisions ReviewedIntentDecisionCounts
+	tcpMu             sync.Mutex
+	tcpConn           net.Conn
+	tcpExpiry         *time.Timer
+	tcpRefusalMu      sync.Mutex
+	tcpRefused        map[string]bool // per worker run; a new intent gets a fresh ToolSet
+	findingRecorder   FindingRecorder
+	as                *db.AssetStore   // asset store (optional; nil = asset tools not available)
+	cs                *db.CompanyStore // company store (optional)
+	ts                *db.ExplorationStore
+	worker            string
+	taskID            int64 // PG tasks.id; 0 when unknown (tests / orchestrator cross-task reads)
 	// Only the round-0 goals decomposer is restricted to scope values literally
 	// present in the operator's task text. Later agents may add discovered assets.
 	declaredScopeText string
@@ -178,6 +184,26 @@ func NewToolSet(ts *db.ExplorationStore, worker string) *ToolSet {
 // SetTaskID sets the PG task id on this ToolSet so that report_finding can
 // dual-write to the standalone findings table (which survives task deletion).
 func (t *ToolSet) SetTaskID(id int64) { t.taskID = id }
+
+func truncateUTF8Bytes(s string, max int) string {
+	if max < 0 || len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// SetIntentGuidance preserves an authenticated operator's concrete test plan
+// across the main-agent -> intent -> worker boundary. It is never inferred from
+// past tasks or external content.
+func (t *ToolSet) SetIntentGuidance(message string) {
+	message = strings.TrimSpace(message)
+	message = truncateUTF8Bytes(message, 6000)
+	t.intentGuidance = message
+}
 
 // SetCoverageEnabled records whether this task has the asset-coverage feature on
 // (default enabled). Passing false makes graphOverviewData omit the coverage block
@@ -497,6 +523,9 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 		if json.Unmarshal(n.Payload, &fp) == nil {
 			if c, ok := fp["confidence"].(string); ok && c != "" {
 				m["confidence"] = c
+			}
+			if stage, ok := fp["goal_stage"].(string); ok && stage != "" {
+				m["goal_stage"] = stage
 			}
 		}
 		recentFacts = append(recentFacts, m)
@@ -950,6 +979,7 @@ const factsPageSize = 20
 // listIntents lets the planner inspect older directions before proposing another
 // experiment. graph_overview intentionally includes only a recent window.
 func (t *ToolSet) listIntents() actool.CoreTool {
+	seen := map[string]bool{}
 	return t.readExpTool("list_intents", "현재 작업과 직접 연결된 작업의 과거 탐색 의도를 최신순으로 검색합니다. 새 실험을 만들기 전에 같은 입력·상태·검증 질문을 이미 시험했는지 q와 before로 확인하세요. 연결된 작업의 항목은 읽기 전용입니다.",
 		obj(map[string]any{
 			"limit":  intp("반환할 항목 수(기본 20, 최대 50)"),
@@ -963,6 +993,11 @@ func (t *ToolSet) listIntents() actool.CoreTool {
 				Q      string `json:"q"`
 			}
 			_ = json.Unmarshal(in, &a)
+			key := fmt.Sprintf("%d/%d/%s", a.Before, a.Limit, strings.TrimSpace(strings.ToLower(a.Q)))
+			if seen[key] {
+				return actool.Errorf("같은 list_intents 페이지를 이번 계획 회차에서 이미 확인했습니다. 반복 조회 대신 확인된 근거로 add_intent를 호출하거나, 새 검증 방향이 없으면 이유를 설명하고 종료하세요."), nil
+			}
+			seen[key] = true
 			limit := a.Limit
 			if limit <= 0 {
 				limit = 20
@@ -1072,10 +1107,12 @@ func (t *ToolSet) nodeDetail() actool.CoreTool {
 
 // intentItem 是 add_intent 批量/单条的一条探索方向。
 type intentItem struct {
-	Summary   string            `json:"summary"`
-	AssetIDs  []json.RawMessage `json:"asset_ids"`
-	ParentIDs []json.RawMessage `json:"parent_ids"`
-	Priority  int               `json:"priority"`
+	CandidateID string            `json:"candidate_id"`
+	Summary     string            `json:"summary"`
+	Guidance    string            `json:"guidance"`
+	AssetIDs    []json.RawMessage `json:"asset_ids"`
+	ParentIDs   []json.RawMessage `json:"parent_ids"`
+	Priority    int               `json:"priority"`
 }
 
 // addOneIntent 创建一条意图节点并连上游血缘，返回 id。
@@ -1083,6 +1120,11 @@ type intentItem struct {
 // 节点（不能挂在别的意图/目标/提示上）。顶层全新方向留空 parent_ids，兜底连 origin fact。
 // 这样"每个意图都连到 fact 节点、且是发现驱动而非凭空规划"从创建路径上被强制。
 func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
+	resolved, err := t.resolveReviewedIntent(it)
+	if err != nil {
+		return 0, err
+	}
+	it = resolved
 	if strings.TrimSpace(it.Summary) == "" {
 		return 0, fmt.Errorf("summary는 비워 둘 수 없습니다")
 	}
@@ -1142,6 +1184,18 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		priority = 5
 	}
 	anchors := pidList(it.AssetIDs)
+	if len(anchors) > 0 {
+		if t.as == nil {
+			return 0, fmt.Errorf("asset_ids를 검증할 수 없습니다. 실제 자산 ID가 없으면 asset_ids를 비우세요")
+		}
+		found, err := t.as.GetByIDs(anchors)
+		if err != nil {
+			return 0, fmt.Errorf("asset_ids 검증 실패: %w", err)
+		}
+		if len(found) != len(anchors) {
+			return 0, fmt.Errorf("asset_ids에 존재하지 않는 ID가 있습니다. ID를 추측하지 말고 list_assets에서 확인하거나 asset_ids를 비우세요")
+		}
+	}
 	// 资产拦截：意图绑定的资产若命中系统资产拦截规则，则禁止下发该意图。
 	if t.as != nil && len(anchors) > 0 {
 		hits, err := t.as.CheckAssetsIntercept(t.taskID, anchors)
@@ -1158,12 +1212,23 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		}
 	}
 	payload := map[string]any{"summary": it.Summary}
+	guidance := strings.TrimSpace(it.Guidance)
+	if guidance == "" {
+		guidance = t.intentGuidance
+	}
+	if guidance != "" {
+		guidance = truncateUTF8Bytes(guidance, 6000)
+		payload["guidance"] = guidance
+	}
 	if len(anchors) > 0 {
 		payload["asset_ids"] = anchors
 	}
 	id, err := t.ts.AddIntent(payload, priority, anchors, "planner")
 	if err != nil {
 		return 0, err
+	}
+	if t.reviewedIntents != nil {
+		t.reviewedDecisions.Persisted++
 	}
 	// upstream lineage: link each (validated) fact/finding parent → this intent, so
 	// "multiple facts combine into one new intent" is expressible.
@@ -1186,15 +1251,31 @@ func normalizedIntentSummary(text string) string {
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
-	return t.writeExpTool("add_intent", "새 탐색 방향을 frontier에 추가하고 탐색 그래프에 연결합니다. 의도는 고정된 종류가 아니며 summary에 무엇을 왜 탐색·검증할지 한 문장으로 적으세요.\n"+
-		"여러 새 방향은 intents 배열로 한 번에 제출하세요. 반환 ids는 같은 순서이며 실패 항목의 ID는 0입니다(상세 오류는 errors). 단일 의도는 최상위 summary를 사용하세요.",
-		obj(map[string]any{
-			"intents":    map[string]any{"type": "array", "description": "추가할 탐색 방향 배열. 각 항목은 summary/asset_ids/parent_ids/priority를 사용합니다. 반환 ids는 같은 순서입니다.", "items": map[string]any{"type": "object"}},
-			"summary":    str("단일 탐색 방향: 무엇을 왜 할지 한 문장으로 설명"),
-			"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "대상 자산 ID(list_assets 반환값; 탐색 노드 ID 아님). 구체적인 사이트·인터페이스·매개변수·호스트에 대한 방향이면 반드시 연결하세요. 순수 전역 정찰일 때만 비워 두세요."},
-			"parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "상위 근거 노드 ID(선택 사항). 이미 존재하는 사실(fact) 또는 발견(finding) ID만 넣으세요. 의도·목표·힌트는 허용되지 않습니다. 독립적인 최상위 정찰은 비워 두세요."},
-			"priority":   intp("우선순위 0~10(기본 5)"),
-		}),
+	name := "add_intent"
+	description := "새 탐색 방향을 frontier에 추가하고 탐색 그래프에 연결합니다. 의도는 고정된 종류가 아니며 summary에 무엇을 왜 탐색·검증할지 한 문장으로 적으세요.\n" +
+		"여러 새 방향은 intents 배열로 한 번에 제출하세요. 반환 ids는 같은 순서이며 실패 항목의 ID는 0입니다(상세 오류는 errors). 단일 의도는 최상위 summary를 사용하세요. 구체적인 사용자 검증 절차는 guidance에 보존하세요."
+	schema := obj(map[string]any{
+		"intents":    map[string]any{"type": "array", "description": "추가할 탐색 방향 배열. 반환 ids는 같은 순서입니다.", "items": map[string]any{"type": "object"}},
+		"summary":    str("단일 탐색 방향: 무엇을 왜 할지 한 문장으로 설명"),
+		"guidance":   str("구체적인 검증 절차·예상 원시 응답·중단 조건. 사용자 지침을 제목으로 축약하지 마세요."),
+		"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "list_assets가 실제 반환한 대상 자산 ID만 사용하세요. ID를 추측하거나 생성하지 마세요. 로컬 파일 분석 등 등록된 자산이 없으면 비워 두세요."},
+		"parent_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "상위 근거 노드 ID(선택 사항). 이미 존재하는 사실(fact) 또는 발견(finding) ID만 넣으세요. 의도·목표·힌트는 허용되지 않습니다. 독립적인 최상위 정찰은 비워 두세요."},
+		"priority":   intp("우선순위 0~10(기본 5)"),
+	})
+	if t.reviewedIntents != nil {
+		name = "select_reviewed_intent"
+		description = "이번 작업의 의도는 검토된 후보 ID만 선택합니다. candidate_id 하나만 제출하세요. summary, guidance, asset_ids, parent_ids, priority를 모델이 작성하면 거부됩니다."
+		ids := make([]string, 0, len(t.reviewedIntents))
+		for id := range t.reviewedIntents {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		schema = obj(map[string]any{
+			"candidate_id": map[string]any{"type": "string", "enum": ids, "description": "검토된 다음 국소 검사의 ID"},
+		}, "candidate_id")
+		schema["additionalProperties"] = false
+	}
+	return t.writeExpTool(name, description, schema,
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				Intents    []intentItem `json:"intents"`
@@ -1251,6 +1332,59 @@ func (t *ToolSet) listGoals() actool.CoreTool {
 		})
 }
 
+func evidenceExplicitlyUnverified(payload json.RawMessage) bool {
+	var fields struct {
+		Summary            string `json:"summary"`
+		Detail             string `json:"detail"`
+		Evidence           string `json:"evidence"`
+		VerificationStatus string `json:"verification_status"`
+	}
+	if json.Unmarshal(payload, &fields) != nil {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(fields.VerificationStatus))
+	if status == "verified" || status == "complete" {
+		return false
+	}
+	if status == "unverified" || status == "pending" || status == "incomplete" {
+		return true
+	}
+	markers := []string{
+		"unverified", "not verified", "verification pending", "not validated", "validation pending",
+		"미검증", "검증되지 않", "검증하지 않", "검증 전", "검증 대기",
+	}
+	resolved := []string{
+		"reverified", "re-verified", "independently verified", "verification complete", "validation complete",
+		"재검증", "검증 완료", "확인 완료",
+	}
+	text := strings.Join([]string{fields.Summary, fields.Detail, fields.Evidence}, "\n")
+	segments := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == ';' || r == '.' || r == '!' || r == '?' || r == '。' || r == '；'
+	})
+	for _, segment := range segments {
+		segment = strings.ToLower(strings.TrimSpace(segment))
+		if segment == "" {
+			continue
+		}
+		resolvedHere := false
+		for _, marker := range resolved {
+			if strings.Contains(segment, marker) {
+				resolvedHere = true
+				break
+			}
+		}
+		if resolvedHere {
+			continue
+		}
+		for _, marker := range markers {
+			if segment == marker || strings.HasPrefix(segment, marker+" ") || strings.HasSuffix(segment, " "+marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (t *ToolSet) proveGoal() actool.CoreTool {
 	return t.writeExpTool("prove_goal", "이 작업의 검증된 사실 또는 취약점 노드가 목표 달성을 직접 입증할 때만 호출하세요. 단순 HTTP 성공, 도구 실행 성공, 주관적 판단 또는 연관 작업의 읽기 전용 노드를 증거로 쓰지 마세요.",
 		obj(map[string]any{
@@ -1289,6 +1423,9 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 			}
 			if evidenceNode.Kind == db.KindFact && evidenceNode.State != "confirmed" {
 				return actool.Errorf("검증되지 않은 사실은 목표 달성 증거로 사용할 수 없습니다"), nil
+			}
+			if evidenceExplicitlyUnverified(evidenceNode.Payload) {
+				return actool.Errorf("evidence explicitly says verification is incomplete; it cannot prove goal completion"), nil
 			}
 			_ = t.ts.Link(ev, db.RelProves, goal)
 			_ = t.ts.SetNodeState(goal, "met")
@@ -1564,6 +1701,7 @@ type factItem struct {
 	Evidence      string            `json:"evidence"`       // 一行关键证据（命令+关键输出行），支撑结论、便于事后核对
 	EvidenceQuote string            `json:"evidence_quote"` // exact excerpt from successful tool output
 	Confidence    string            `json:"confidence"`     // observed（直接看到）| inferred（据现象推断）
+	GoalStage     string            `json:"goal_stage"`     // optional goal-chain stage; never proves a goal by itself
 	IntentID      json.RawMessage   `json:"intent_id"`
 	AssetIDs      []json.RawMessage `json:"asset_ids"`
 }
@@ -1574,7 +1712,19 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 	if strings.TrimSpace(it.Summary) == "" {
 		return 0, fmt.Errorf("summary는 비워 둘 수 없습니다")
 	}
+	stage := strings.TrimSpace(it.GoalStage)
+	if stage != "" && stage != "reachability" && stage != "fault" && stage != "access" && stage != "output" {
+		return 0, fmt.Errorf("goal_stage는 reachability, fault, access, output 중 하나여야 합니다")
+	}
+	// 환각 방지: observed/confirmed로 구체 런타임·네트워크 관측을 주장하는데 이 의도에
+	// 성공한 네트워크/실행 활동이 없으면 거부한다(정적 소스 확인·부정 관찰은 통과).
+	if err := t.checkFactGrounding(it, defaultIntent); err != nil {
+		return 0, err
+	}
 	payload := map[string]any{"summary": it.Summary}
+	if stage != "" {
+		payload["goal_stage"] = stage
+	}
 	if it.Detail != "" {
 		payload["detail"] = it.Detail
 	}
@@ -1675,6 +1825,7 @@ func (t *ToolSet) recordOneFact(it factItem, defaultIntent int64) (int64, error)
 
 func (t *ToolSet) recordFact() actool.CoreTool {
 	return t.writeExpTool("record_fact", "탐색 결과의 사실·결론을 그래프에 기록하고 이를 낳은 의도(intent_id)에 연결합니다. 지문·열거 같은 긍정 관찰과 포트 닫힘·주입 불가·로그인 진입점 미발견 같은 부정 관찰을 모두 기록할 수 있습니다.\n"+
+		"목표 연결 단계가 확인된 경우 goal_stage를 reachability(입력 도달), fault(결함 발현), access(요구 자원 접근), output(실제 응답 출력) 중 하나로 표시하세요. 이 표식은 분류일 뿐 목표 달성 증명이 아니며, 미확인 단계는 채우지 마세요. 서로 다른 경로의 단계를 이어 붙여 하나의 성공으로 주장하지 마세요.\n"+
 		"한 번의 탐색에서 얻은 여러 관찰은 가능하면 하나의 사실로 묶으세요. summary는 결론 한 문장, detail은 여러 구체적인 근거입니다. 상태 코드·지문·제목을 각각 별도 사실로 기록하지 마세요. 지나친 분할은 그래프를 불필요하게 키웁니다.\n"+
 		"서로 다른 결론 여러 개를 한 번에 기록할 때만 facts 배열을 사용하세요. 각 항목의 intent_id를 생략하면 최상위 intent_id를 사용합니다. 반환 ids는 같은 순서입니다.\n"+
 		"실제 도구 출력에서 확인한 내용만 기록하고 추측하지 마세요. 일반적인 HTTP 200이나 공개 페이지는 사실이지 취약점이 아닙니다. evidence와 confidence를 정확히 작성하세요.\n"+
@@ -1682,13 +1833,14 @@ func (t *ToolSet) recordFact() actool.CoreTool {
 		"  · confidence: observed는 출력에서 직접 본 경우, inferred는 현상에서 추론한 경우입니다.\n"+
 		"  · 부정 결론은 실제 관찰과 잠정 해석만 적으세요. 방향을 포기할지는 계획 에이전트가 전체 현황으로 판단합니다. 증거가 약하거나 한 번만 시도했다면 inferred로, 합리적인 방법을 충분히 검토하고 직접 확인했다면 observed로 표시하세요.",
 		obj(map[string]any{
-			"facts":          map[string]any{"type": "array", "description": "서로 다른 결론 여러 개를 기록할 때 사용하는 사실 배열. 각 항목은 summary/detail/evidence/confidence/intent_id/asset_ids를 사용합니다. intent_id가 없으면 최상위 값을 사용하며 반환 ids는 같은 순서입니다.", "items": map[string]any{"type": "object"}},
+			"facts":          map[string]any{"type": "array", "description": "서로 다른 결론 여러 개를 기록할 때 사용하는 사실 배열. 각 항목은 summary/detail/evidence/confidence/goal_stage/intent_id/asset_ids를 사용합니다. intent_id가 없으면 최상위 값을 사용하며 반환 ids는 같은 순서입니다.", "items": map[string]any{"type": "object"}},
 			"summary":        str("이번 탐색 결론을 요약하는 한 문장"),
 			"intent_id":      idp("이 사실을 낳은 현재 작업의 의도 ID"),
 			"detail":         str("이번 탐색에서 확인한 여러 구체적인 관찰과 상세 내용"),
 			"evidence":       str("핵심 증거 한 줄: 명령과 결론을 뒷받침하는 출력 1~2줄. 긴 출력은 detail에 기록하세요."),
 			"evidence_quote": str("성공한 도구 출력에서 16자 이상 그대로 복사한 핵심 부분. evidence와 별도 JSON 필드입니다. 누락 시 evidence가 출력 원문과 정확히 일치하면 대신 검사합니다."),
 			"confidence":     str("observed(출력에서 직접 확인) 또는 inferred(현상에서 추론). 부정 결론은 특히 정확히 표시하세요."),
+			"goal_stage":     str("선택: reachability, fault, access, output 중 관찰로 확인된 목표 연결 단계. 표식 자체는 목표 달성 증거가 아닙니다."),
 			"asset_ids":      map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "관련 자산 ID(선택 사항, 여러 개 가능)"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
@@ -1964,7 +2116,7 @@ func (t *ToolSet) setConstraints() actool.CoreTool {
 		"현재 작업의 탐색 경계를 정하는 운영 제약을 추가합니다. type=allow는 허용하는 행동, deny는 금지하는 행동입니다.\n"+
 			"제약은 수행 가능 여부에 관한 규칙(예: 현재 포트만 테스트, 운영 DB 쓰기 금지, 수동적 정찰만 허용)이며 목표나 공격 단계가 아닙니다.\n"+
 			"여러 제약은 constraints 배열에 한 번에 넣으세요. ids는 같은 순서와 길이로 반환되며 실패 항목의 ID는 0이고 세부 정보는 errors에 있습니다. 하나만 추가할 때는 최상위 text/type을 사용하세요.\n"+
-			"작업 목표나 설명에 명시된 제약만 등록하고 만들어 내지 마세요. 유형이 불명확하면 더 보수적인 deny를 사용하세요.",
+			"작업 목표나 설명에 명시된 제약만 등록하고 만들어 내지 마세요. 임시·조건부 보류를 영구 deny로 바꾸지 마세요. 유형이 불명확하면 추측해서 등록하지 마세요.",
 		obj(map[string]any{
 			"constraints": map[string]any{"type": "array", "description": "권장: 추가할 제약 배열. 각 항목은 필수 text와 type(allow|deny)을 포함합니다. ids는 같은 순서와 길이로 반환됩니다", "items": map[string]any{"type": "object"}},
 			"text":        str("[단일 항목] 운영 제약 내용"),
