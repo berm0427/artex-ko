@@ -544,7 +544,7 @@ func (s *Server) seedOrchestrationTools() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v7_list_facts_paging"
+	const flag = "tool_schema_refresh_v8_tcp_session_send_text"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -562,7 +562,20 @@ func (s *Server) refreshBuiltinToolSchemas() {
 	//     SeedTool 首插入only，旧库已 seed 的 schema 否则收不到这个新参数。
 	//   - list_facts：改为分页，新增 limit/before/q 入参；旧库已 seed 的空 schema 否则
 	//     在工具管理页显示「无参数」，模型也拿不到这几个参数说明。
-	refreshBuiltin := map[string]bool{"goal_met": true, "insert_assets": true, "list_facts": true}
+	//   - tcp_session：新增 send_text/append_newline/parts/read_wait_ms/steps（含
+	//     open_send/open_sequence）；旧库已 seed 的 schema 只有 send_hex，worker 模型
+	//     因此被迫把 ASCII 命令手工转 hex（小模型易错），拿不到 send_text。
+	//   - tcp_sequence/tcp_repeat_sequence：每一步新增 send_text/parts；tcp_exchange
+	//     schema 未变，一并刷入以同步描述。
+	refreshBuiltin := map[string]bool{
+		"goal_met":            true,
+		"insert_assets":       true,
+		"list_facts":          true,
+		"tcp_session":         true,
+		"tcp_sequence":        true,
+		"tcp_repeat_sequence": true,
+		"tcp_exchange":        true,
+	}
 	for _, sd := range agent.BuiltinToolSeeds() {
 		if !refreshBuiltin[sd.Key] {
 			continue
