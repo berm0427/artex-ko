@@ -118,10 +118,6 @@ Push-Location $repoRoot
 try {
     & $goExe build -tags embedui -trimpath -o artex.exe .\cmd\artex
     if ($LASTEXITCODE -ne 0) { throw 'Go 빌드 실패' }
-    $chatgptBridgeDir = Join-Path $env:LOCALAPPDATA 'ARTEX'
-    New-Item -ItemType Directory -Path $chatgptBridgeDir -Force | Out-Null
-    & $goExe build -trimpath -o (Join-Path $chatgptBridgeDir 'chatgpt-plan-bridge.exe') .\cmd\chatgpt-plan-bridge
-    if ($LASTEXITCODE -ne 0) { throw 'ChatGPT 구독 브리지 빌드 실패' }
 } finally {
     Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue
     Pop-Location
@@ -180,7 +176,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $postgresData 'PG_VERSION'))) {
 }
 
 $pgIsReady = Join-Path $postgresBin 'pg_isready.exe'
-& $pgIsReady -h 127.0.0.1 -p $PostgresPort -U artex *> $null
+& $pgIsReady -h 127.0.0.1 -p $PostgresPort -U artex -t 5 *> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Step "PostgreSQL 시작: 127.0.0.1:$PostgresPort"
     $pgArgs = @(
@@ -198,7 +194,7 @@ setlocal
 set "PGBIN=$postgresBin"
 set "PGDATA=$postgresData"
 set "PGLOG=$postgresLog"
-"%PGBIN%\pg_isready.exe" -h 127.0.0.1 -p $PostgresPort -U artex >nul 2>&1
+"%PGBIN%\pg_isready.exe" -h 127.0.0.1 -p $PostgresPort -U artex -t 5 >nul 2>&1
 if not errorlevel 1 goto postgres_ready
 echo [ARTEX-KO] PostgreSQL 시작 중...
 "%PGBIN%\pg_ctl.exe" -D "%PGDATA%" -l "%PGLOG%" -o "-p $PostgresPort -h 127.0.0.1" start

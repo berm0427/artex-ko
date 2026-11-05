@@ -53,7 +53,6 @@ func (sc *Scheduler) Run(ctx context.Context) {
 		case <-t.C:
 			sc.s.reconcileConcurrency() // 并发上限:有空位就把排队任务补位启动
 			sc.step()
-			sc.codexHelpStep()
 			sc.autoContinueStep()
 		}
 	}
@@ -213,14 +212,6 @@ func (sc *Scheduler) autoContinueStep() {
 		if latest == 0 || now-latest < 60 {
 			continue
 		}
-		// Give the connected Codex conversation time to respond before
-		// spawning a successor that would obscure the original task.
-		if requested, _ := sc.pg.GetSchedState(fmt.Sprintf("codex_help_requested_%d", id)); requested != "" {
-			requestedAt, _ := strconv.ParseInt(requested, 10, 64)
-			if requestedAt > 0 && now-requestedAt < 600 {
-				continue
-			}
-		}
 		depth := 0
 		cursor := task
 		for len(cursor.lifecycleSnapshot().SourceTaskIDs) == 1 {
@@ -236,12 +227,6 @@ func (sc *Scheduler) autoContinueStep() {
 			continue
 		}
 		key := fmt.Sprintf("auto_continue_source_%d", id)
-		// A connected Codex conversation gets the first chance to review a
-		// stalled task. Without this grace period, the 60-second successor
-		// would be created before codexHelpStep's 180-second request.
-		if _, helpErr := sc.codexHelpConfig(); helpErr == nil && now-task.CreatedAt < 240 {
-			continue
-		}
 		marker, err := sc.pg.GetSchedState(key)
 		if err != nil || marker != "" {
 			continue
@@ -516,5 +501,33 @@ func (sc *Scheduler) saveFiredGoalSet(set map[int64]bool) {
 	b, _ := json.Marshal(ids)
 	if err := sc.pg.SetSchedState(schedKeyFiredGoals, string(b)); err != nil {
 		log.Printf("[scheduler] save fired goals failed: %v", err)
+	}
+}
+
+// taskModelFailure returns a classified operational failure. A later
+// successful planner round clears the failure.
+func (sc *Scheduler) taskModelFailure(id int64) (logID int64, kind string) {
+	var line string
+	err := sc.pg.QueryRow(`SELECT id, text FROM server_logs
+WHERE tag='planner' AND text LIKE $1 ORDER BY id DESC LIMIT 1`,
+		fmt.Sprintf("[planner] 작업 %d 계획 %%", id)).Scan(&logID, &line)
+	if err != nil || !strings.Contains(line, "계획 오류:") {
+		return 0, ""
+	}
+	return logID, classifyModelFailure(line)
+}
+
+func classifyModelFailure(line string) string {
+	s := strings.ToLower(line)
+	switch {
+	case strings.Contains(s, "lookup auth.openai.com") &&
+		(strings.Contains(s, "no such host") || strings.Contains(s, "server misbehaving")):
+		return "auth_dns"
+	case strings.Contains(s, "invalid local bridge key"):
+		return "bridge_key"
+	case strings.Contains(s, "token_revoked") || strings.Contains(s, "invalidated oauth token"):
+		return "auth_revoked"
+	default:
+		return ""
 	}
 }

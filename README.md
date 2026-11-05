@@ -19,47 +19,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows.ps
 
 기본 포트는 웹 `8787`, PostgreSQL `5433`입니다. 로컬 설정·데이터베이스·API 키·작업 기록은 Git으로 복사되지 않습니다.
 
-## ChatGPT 구독으로 실행하기
+## 실행 동작
 
-ChatGPT Plus/Pro 연결은 일반 OpenAI API 키와 별개인 로컬 브리지를 사용합니다. 계정 동의와 첫 LLM 프로필 설정은 [ChatGPT 구독 연동 안내](docs/ChatGPT-구독-연동.md)를 따라 **한 번** 완료하세요. 이후에는 저장소 루트에서 아래 파일 하나로 브리지와 ARTEX를 실행합니다.
+ARTEX는 다음 의도에 확인된 사실과 해당 실행 폴더의 위치를 인계해 중복 계측을 줄입니다. 비교 실행에서는 시작 전에 `ARTEX_EVIDENCE_HANDOFF=off`로 끌 수 있습니다. 적용 범위와 12개 자료 평가 기준은 [작업 인계 평가](docs/evidence-handoff-evaluation.md)에 정리했습니다.
 
-```powershell
-.\START-ARTEX-WITH-CHATGPT.bat
-```
+목표가 비공개 결과의 실제 응답 획득이라면 실행자는 확인된 사실에 `goal_stage`(`reachability`/`fault`/`access`/`output`)를 선택적으로 기록할 수 있습니다. 계획자와 다음 실행자는 최근 확인 사실의 단계 색인을 보지만, 서로 다른 경로의 단계를 자동으로 합치거나 단계 표식만으로 성공 판정하지 않습니다. 예를 들어 프로세스 충돌은 `fault`의 증거일 수 있지만 `access`나 `output`의 증거는 아닙니다. 자료 조회 실패도 대상의 거부 응답과 구분하며, 무해한 국소 검증에 최종 출력의 사전 증명을 요구하지 않습니다.
 
-시작 BAT는 브리지 상태를 확인하고 ARTEX의 로컬 프로필 키를 동기화합니다. 인증 키는 출력하거나 Git에 저장하지 않습니다.
-
-## ARTEX ↔ Codex 도움 연결 (선택)
-
-기존 **Codex 대화 하나**를 연결할 수 있습니다. 이 PC에서 해당 대화의 UUID를 확인한 뒤 한 번 실행하세요. Codex CLI가 필요합니다.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\connect-codex-help.ps1 -ThreadId "대화-UUID"
-```
-
-이후 `START-ARTEX-WITH-CHATGPT.bat`은 Codex CLI 경로를 갱신합니다. ARTEX 작업에 열린 목표는 있지만 새 실험 없이 멈추면, ARTEX 내부 스케줄러가 기존 Codex 대화에 작업 번호와 검토 요청을 보냅니다. Codex가 기록을 검토해 근거 있는 조언을 만들면 `scripts/send-codex-help.ps1`이 로컬 전용 키로 기존 ARTEX 채팅 경로(`/api/chat?task=작업번호`)에 전달합니다. 답변이 없으면 일정 시간 후 최대 두 번 재요청하고, 전달된 답변은 작업 기록에서 확인합니다. **도움 요청을 보낸 것 자체가 자동 답변이나 문제 해결을 뜻하지는 않습니다.** 목표 성공은 실제 대상 응답으로만 판정합니다.
-
-연결 정보는 Git에서 제외되는 `data/codex-help.json`에 저장됩니다. Codex 예약 작업이나 별도의 복제 모델 세션을 만들지 않습니다. 자동 후속 작업 생성은 기본 시작 BAT에서 켜지지 않습니다. 연결을 끄려면 ARTEX를 종료한 뒤 이 로컬 연결 파일만 제거하세요.
+작업의 `timeout_seconds`는 개발·평가 실행에서 고정된 비교 창이 필요할 때만 지정합니다(90분은 `5400`). 생략하거나 `0`이면 기존 엔진에서 작업 전체의 고정 종료 시각을 두지 않습니다. 운영 시 장기 풀이를 허용하더라도 무제한 재시도나 무제한 자원 사용을 뜻하지 않습니다. 반복 응답 감지, 실행별 예산, 범위·안전 중단 기준은 계속 적용하고, 작업별 비용·자원 상한은 별도로 설정·검증해야 합니다. 이전에 지정한 제한은 해당 작업에 그대로 적용되며 자동으로 해제되지 않습니다.
 
 ## 재시작
 
-서버 소스 수정은 실행 중인 `artex.exe`에 자동 반영되지 않습니다. 설치 스크립트로 다시 빌드한 뒤 아래 BAT로 이 설치본의 ARTEX·구독 브리지·전용 PostgreSQL을 재시작할 수 있습니다.
+서버 소스 수정은 실행 중인 `artex.exe`에 자동 반영되지 않습니다. 설치 스크립트로 다시 빌드한 뒤 아래 BAT로 이 설치본의 ARTEX와 전용 PostgreSQL을 다시 시작하세요.
 
 ```powershell
-.\RESTART-ARTEX-WITH-CHATGPT.bat
+.\START-ARTEX-WITH-LOCAL-MODEL.bat
 ```
 
-재시작은 진행 중인 작업을 끊을 수 있습니다. 스크립트는 다른 프로그램이 포트를 사용 중이면 종료하지 않고 중단합니다. 교체용 실행 파일을 직접 지정하는 방법은 `scripts/restart-artex-with-chatgpt.ps1 -ReplacementExe "C:\path\artex-new.exe"`이며, 웹 UI가 내장된 `embedui` 빌드만 받습니다.
+재시작은 진행 중인 작업을 끊을 수 있습니다. 다른 프로그램이 포트를 사용 중이면 스크립트는 종료하지 않고 중단합니다.
 
 ## 자주 겪는 문제
 
 | 증상 | 확인할 것 |
 | --- | --- |
 | “프런트엔드가 내장되어 있지 않습니다” | `embedui` 빌드가 필요합니다. `scripts/install-windows.ps1`로 다시 빌드하세요. |
-| `401 invalid local bridge key` | 브리지 로그인 상태와 저장된 LLM 프로필 키가 다른 경우입니다. 구독 시작 BAT로 재시작하고 [구독 연동 안내](docs/ChatGPT-구독-연동.md)의 키 점검 절차를 확인하세요. 키 원문을 공유하지 마세요. |
-| `Connected: false` | 브리지 로그인 또는 네트워크 상태를 확인하세요. `chatgpt-plan-bridge.exe login`은 사용자의 브라우저 동의가 필요합니다. |
-| `auth.openai.com` DNS 오류 | 풀이 실패가 아니라 인증 서버 이름 조회 실패입니다. 네트워크·DNS 복구 후 원본 작업을 재개하세요. |
-| Codex 도움 요청이 오지 않음 | 연결 파일, Codex CLI, 대상 대화 UUID를 확인하세요. 연결은 실행 중인 모든 작업을 소급해서 깨우지 않습니다. |
 
 REA 역공학 도구가 필요한 경우 ARTEX 설치 후 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-rea-wsl.ps1 -Distro Ubuntu`를 실행하고 **시스템 → MCP**에서 확인하세요. WSL 설치에는 관리자 권한이나 재부팅이 필요할 수 있습니다.
 
