@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -75,10 +77,37 @@ func detectUngroundedObservedClaim(confidence, summary, detail string, activitie
 	if !hasRuntimeObservationClaim(strings.ToLower(summary + "\n" + detail)) {
 		return "", false
 	}
-	if hasSuccessfulExecOrNetworkActivity(activities) {
+	if hasSuccessfulExecOrNetworkActivity(activities) || hasObservedTCPResponse(activities) {
 		return "", false
 	}
 	return ungroundedObservedClaimReason, true
+}
+
+// A Redis -NOPERM reply is still an observed network response. The active
+// finding guard deliberately keeps its stricter success rule; this check only
+// lets record_fact store an exact negative observation.
+func hasObservedTCPResponse(activities []db.Activity) bool {
+	for _, activity := range activities {
+		if activity.Kind != "tool_result" || activity.IsError {
+			continue
+		}
+		tool := strings.ToLower(activity.Tool)
+		if tool != "tcp_exchange" && tool != "tcp_session" {
+			continue
+		}
+		var response struct {
+			ReceivedBytes int    `json:"received_bytes"`
+			ReceivedHex   string `json:"received_hex"`
+		}
+		if json.Unmarshal([]byte(activity.Detail), &response) != nil || response.ReceivedBytes <= 0 {
+			continue
+		}
+		decoded, err := hex.DecodeString(response.ReceivedHex)
+		if err == nil && len(decoded) == response.ReceivedBytes {
+			return true
+		}
+	}
+	return false
 }
 
 // checkFactGrounding: 사실의 의도 활동을 불러와 근거 없는 관측 주장을 거부한다.
@@ -95,8 +124,78 @@ func (t *ToolSet) checkFactGrounding(it factItem, defaultIntent int64) error {
 	if err != nil {
 		return nil
 	}
+	for i := range acts {
+		if acts[i].Kind != "tool_result" || acts[i].IsError {
+			continue
+		}
+		tool := strings.ToLower(acts[i].Tool)
+		if tool != "tcp_exchange" && tool != "tcp_session" {
+			continue
+		}
+		if detail, detailErr := t.ts.ActivityDetail(acts[i].ID); detailErr == nil {
+			acts[i].Detail = detail
+		}
+	}
+	if framingErrorCitedAsLuaRestriction(it, acts) {
+		return fmt.Errorf("인용한 응답은 RESP 프레이밍 오류(-ERR Protocol error / not an integer)입니다. Lua 샌드박스 제한의 근거로 기록하지 말고 resp_args로 다시 요청해 실제 실행 응답을 확인하세요")
+	}
 	if reason, ungrounded := detectUngroundedObservedClaim(it.Confidence, it.Summary, it.Detail, acts); ungrounded {
 		return fmt.Errorf("%s 실제로 대상에 요청·실행해 응답을 확인한 뒤 observed로 기록하거나, 미관측 추론이면 confidence를 inferred로 낮추고 다음 검증 동작을 제시하세요", reason)
 	}
 	return nil
+}
+
+// framingErrorCitedAsLuaRestriction rejects a fact that claims a Lua sandbox
+// restriction (io/os/package removed) when its evidence is really a Redis RESP
+// framing/argument error — i.e. the inline EVAL never reached Lua at all, so the
+// right move is to resend via resp_args, not to record a sandbox conclusion.
+// It deliberately NEVER fires when the intent produced a genuine Lua runtime
+// error ("nil value" / "error running script"), so a real sandbox finding is
+// never blocked. io/os/package are matched only in qualified forms (rawget,
+// quoted globals, Korean 차단/제거) to avoid matching "version"/"position"/etc.
+func framingErrorCitedAsLuaRestriction(it factItem, activities []db.Activity) bool {
+	claim := strings.ToLower(it.Summary + "\n" + it.Detail)
+	if !containsAny(claim, "lua", "sandbox", "샌드박스") ||
+		!containsAny(claim, "nil value", "rawget", "'io'", "'os'", "'package'",
+			"io 제거", "os 제거", "package 제거", "io 차단", "os 차단", "package 차단",
+			"io 접근", "os 접근", "package 접근") {
+		return false
+	}
+	quote := strings.ToLower(strings.TrimSpace(it.EvidenceQuote))
+	sawFraming := false
+	for _, activity := range activities {
+		if activity.Kind != "tool_result" || activity.IsError {
+			continue
+		}
+		tool := strings.ToLower(activity.Tool)
+		if tool != "tcp_exchange" && tool != "tcp_session" {
+			continue
+		}
+		var response struct {
+			ReceivedHex string `json:"received_hex"`
+		}
+		if json.Unmarshal([]byte(activity.Detail), &response) != nil {
+			continue
+		}
+		raw, err := hex.DecodeString(response.ReceivedHex)
+		if err != nil {
+			continue
+		}
+		lower := strings.ToLower(string(raw))
+		// A genuine Lua runtime error means the sandbox claim may be legitimate:
+		// never block it, regardless of any framing errors elsewhere.
+		if strings.Contains(lower, "nil value") || strings.Contains(lower, "error running script") {
+			return false
+		}
+		if !strings.Contains(lower, "-err protocol error") && !strings.Contains(lower, "-err value is not an integer") {
+			continue
+		}
+		// Empty quote → the fact cited no specific bytes; the qualified claim plus
+		// a real framing error in this intent is enough. Otherwise require the
+		// quote to actually occur in this framing response.
+		if quote == "" || strings.Contains(lower, quote) {
+			sawFraming = true
+		}
+	}
+	return sawFraming
 }

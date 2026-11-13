@@ -18,22 +18,34 @@ import (
 // tcpExchange gives workers a bounded, one-shot raw TCP observation without
 // relying on the host shell's dialect or an optional netcat installation.
 func (t *ToolSet) tcpExchange() actool.CoreTool {
-	return t.readExpTool("tcp_exchange", "허가된 대상의 원시 TCP 서비스에 한 번 연결해 선택적 바이트를 보내고 응답 원문을 읽습니다. HTTP 전용 도구나 셸 스크립트가 아닙니다. 대상 범위를 벗어나지 마세요. send_hex는 선택 사항이며 비우면 먼저 오는 배너만 읽습니다. 응답은 UTF-8 텍스트와 hex를 함께 반환합니다.",
+	return t.readExpTool("tcp_exchange", "허가된 대상의 원시 TCP 서비스에 한 번 연결해 선택적 바이트를 보내고 응답 원문을 읽습니다. HTTP 전용 도구나 셸 스크립트가 아닙니다. 대상 범위를 벗어나지 마세요. RESP 명령은 resp_args로 인자 배열을 주면 길이를 자동 계산합니다. 공백이나 따옴표가 있는 RESP 명령, 특히 EVAL/Lua 스크립트는 반드시 resp_args로 보내세요. 인라인 전송은 Redis 파싱 오류를 일으킵니다. 임의 바이트 실험에는 send_hex를 사용하세요. 응답은 UTF-8 텍스트와 hex를 함께 반환합니다.",
 		obj(map[string]any{
-			"host":     str("허가된 대상의 호스트명 또는 IP"),
-			"port":     intp("허가된 대상의 TCP 포트"),
-			"send_hex": str("선택: 전송할 바이트의 16진수 문자열. 서버가 먼저 배너를 보내면 같은 연결에서 이를 읽은 뒤 바이트를 보내고 후속 응답도 읽습니다."),
+			"host":      str("허가된 대상의 호스트명 또는 IP"),
+			"port":      intp("허가된 대상의 TCP 포트"),
+			"send_hex":  str("선택: 전송할 바이트의 16진수 문자열. 서버가 먼저 배너를 보내면 같은 연결에서 이를 읽은 뒤 바이트를 보내고 후속 응답도 읽습니다."),
+			"resp_args": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "선택: RESP 배열의 인자들. 공백·따옴표가 있는 명령, 특히 EVAL/Lua는 반드시 사용하세요. 예: [\"EVAL\",\"return redis.call('GET',KEYS[1])\",\"1\",\"k\"]. send_hex와 함께 지정할 수 없습니다."},
 		}, "host", "port"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
-				Host    string `json:"host"`
-				Port    int    `json:"port"`
-				SendHex string `json:"send_hex"`
+				Host     string   `json:"host"`
+				Port     int      `json:"port"`
+				SendHex  string   `json:"send_hex"`
+				RESPArgs []string `json:"resp_args"`
 			}
 			if err := json.Unmarshal(in, &a); err != nil {
 				return actool.Errorf(fmt.Sprintf("잘못된 인자: %v", err)), nil
 			}
-			out, err := exchangeTCP(ctx, a.Host, a.Port, a.SendHex)
+			if len(a.RESPArgs) > 0 {
+				if a.SendHex != "" {
+					return actool.Errorf("send_hex와 resp_args 중 하나만 지정하세요"), nil
+				}
+				payload, encodeErr := encodeRESPArgs(a.RESPArgs)
+				if encodeErr != nil {
+					return actool.Errorf(encodeErr.Error()), nil
+				}
+				a.SendHex = hex.EncodeToString(payload)
+			}
+			out, err := t.exchangeTCP(ctx, a.Host, a.Port, a.SendHex)
 			if err != nil {
 				return actool.Errorf(fmt.Sprintf("TCP 관찰 실패: %v", err)), nil
 			}
@@ -42,6 +54,16 @@ func (t *ToolSet) tcpExchange() actool.CoreTool {
 }
 
 func exchangeTCP(ctx context.Context, host string, port int, sendHex string) (map[string]any, error) {
+	return exchangeTCPWithDial(ctx, host, port, sendHex, func(ctx context.Context, host string, port int) (net.Conn, error) {
+		return (&net.Dialer{Timeout: 4 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprint(port)))
+	})
+}
+
+func (t *ToolSet) exchangeTCP(ctx context.Context, host string, port int, sendHex string) (map[string]any, error) {
+	return exchangeTCPWithDial(ctx, host, port, sendHex, t.dialTCPOnceAfterRefusal)
+}
+
+func exchangeTCPWithDial(ctx context.Context, host string, port int, sendHex string, dial func(context.Context, string, int) (net.Conn, error)) (map[string]any, error) {
 	host = strings.TrimSpace(host)
 	if host == "" || strings.ContainsAny(host, "/\\\r\n\t ") || port < 1 || port > 65535 {
 		return nil, errors.New("유효한 호스트와 TCP 포트가 필요합니다")
@@ -54,7 +76,7 @@ func exchangeTCP(ctx context.Context, host string, port int, sendHex string) (ma
 	if err != nil {
 		return nil, fmt.Errorf("send_hex 해석: %w", err)
 	}
-	conn, err := (&net.Dialer{Timeout: 4 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprint(port)))
+	conn, err := dial(ctx, host, port)
 	if err != nil {
 		return nil, err
 	}

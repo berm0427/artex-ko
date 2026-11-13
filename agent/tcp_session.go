@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -30,6 +29,7 @@ type tcpSessionArgs struct {
 	Port          int              `json:"port"`
 	SendHex       string           `json:"send_hex"`
 	SendText      string           `json:"send_text"`
+	RESPArgs      []string         `json:"resp_args"`
 	AppendNewline bool             `json:"append_newline"`
 	Parts         []tcpSessionPart `json:"parts"`
 	ReadWaitMS    int              `json:"read_wait_ms"`
@@ -39,24 +39,26 @@ type tcpSessionArgs struct {
 type tcpSessionStep struct {
 	SendHex       string           `json:"send_hex"`
 	SendText      string           `json:"send_text"`
+	RESPArgs      []string         `json:"resp_args"`
 	AppendNewline bool             `json:"append_newline"`
 	Parts         []tcpSessionPart `json:"parts"`
 	ReadWaitMS    int              `json:"read_wait_ms"`
 }
 
 func (t *ToolSet) tcpSession() actool.CoreTool {
-	return t.writeExpTool("tcp_session", "대화형 원시 TCP 서비스용 도구입니다. open으로 초기 출력, open_send로 새 연결의 배너와 즉시 첫 입력의 응답, open_sequence로 미리 정한 여러 입력과 각 응답을 같은 연결·호출에서 확인합니다. send/read/close로 남은 연결을 다룹니다. 짧은 서버 입력 제한 시간에는 별도 호출 사이에 소켓이 닫힐 수 있으므로 open_send/open_sequence를 사용하세요. send_text는 UTF-8, send_hex는 바이너리 hex, parts는 text/hex/repeat_hex+count 조각입니다. 워커마다 연결 하나, 5분 유휴 자동 종료입니다.",
+	return t.writeExpTool("tcp_session", "대화형 원시 TCP 서비스용 도구입니다. open으로 초기 출력, open_send로 새 연결의 배너와 즉시 첫 입력의 응답, open_sequence로 미리 정한 여러 입력과 각 응답을 같은 연결·호출에서 확인합니다. send/read/close로 남은 연결을 다룹니다. 짧은 서버 입력 제한 시간에는 별도 호출 사이에 소켓이 닫힐 수 있으므로 open_send/open_sequence를 사용하세요. RESP 명령은 resp_args로 인자 배열을 주면 길이를 자동 계산합니다. 공백이나 따옴표가 있는 RESP 명령, 특히 EVAL/Lua 스크립트는 반드시 resp_args로 보내세요. 인라인 send_text는 Redis 파싱 오류를 일으킵니다. 임의 바이트 실험에는 send_hex/send_text/parts를 사용하세요. 워커마다 연결 하나, 5분 유휴 자동 종료입니다.",
 		obj(map[string]any{
 			"action":         str("open, open_send, open_sequence, send, read, close 중 하나"),
 			"host":           str("open/open_send/open_sequence 시 허가된 호스트"),
 			"port":           intp("open/open_send/open_sequence 시 허가된 포트"),
 			"send_hex":       str("send 시 바이트 hex; 0x 접두사 없음"),
 			"send_text":      str("send 시 UTF-8 텍스트"),
+			"resp_args":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "RESP 인자 배열. 공백·따옴표가 있는 명령, 특히 EVAL/Lua는 반드시 사용하세요. 예: [\"EVAL\",\"return redis.call('GET',KEYS[1])\",\"1\",\"k\"]. 다른 전송 필드와 함께 지정할 수 없습니다."},
 			"append_newline": map[string]any{"type": "boolean", "description": "send_text 또는 parts 뒤에 LF(0a)를 하나 추가"},
 			"parts":          map[string]any{"type": "array", "description": "선택: 순서대로 조립할 바이트 조각. 각 항목은 text, hex 또는 repeat_hex+count 중 하나", "items": obj(map[string]any{"text": str("UTF-8 텍스트"), "hex": str("바이트 hex"), "repeat_hex": str("반복할 바이트 hex"), "count": intp("반복 횟수")})},
 			"read_wait_ms":   intp("open_send/send/read에서 첫 응답을 기다릴 시간(100~3000ms, 기본 2000ms)"),
 			"steps": map[string]any{"type": "array", "description": "open_sequence 전용: 사전에 정한 1~8개 입력을 한 소켓에서 순서대로 즉시 전송", "items": obj(map[string]any{
-				"send_hex": str("바이트 hex"), "send_text": str("UTF-8 텍스트"), "append_newline": map[string]any{"type": "boolean"},
+				"send_hex": str("바이트 hex"), "send_text": str("UTF-8 텍스트"), "resp_args": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "append_newline": map[string]any{"type": "boolean"},
 				"parts":        map[string]any{"type": "array", "items": obj(map[string]any{"text": str("텍스트"), "hex": str("hex"), "repeat_hex": str("반복 hex"), "count": intp("반복 횟수")})},
 				"read_wait_ms": intp("첫 응답 대기 ms"),
 			})},
@@ -85,6 +87,15 @@ func (t *ToolSet) runTCPSessionEx(ctx context.Context, a tcpSessionArgs) (map[st
 		return nil, err
 	}
 	action := strings.ToLower(strings.TrimSpace(a.Action))
+	// A model may put a multi-step plan into open_send. Reject before dialing;
+	// otherwise steps are silently ignored and the observed reply is attributed
+	// to a request that was never sent.
+	if len(a.Steps) > 0 && action != "open_sequence" {
+		return nil, errors.New("steps는 open_sequence에서만 전송됩니다. 여러 입력을 같은 연결에서 확인하려면 action=open_sequence를 사용하세요")
+	}
+	if action == "open_sequence" && (a.SendHex != "" || a.SendText != "" || len(a.RESPArgs) > 0 || len(a.Parts) > 0) {
+		return nil, errors.New("open_sequence의 입력은 top-level 전송 필드가 아니라 각 steps 항목에 넣으세요")
+	}
 	switch action {
 	case "open", "open_send", "open_sequence":
 		host := strings.TrimSpace(a.Host)
@@ -105,7 +116,7 @@ func (t *ToolSet) runTCPSessionEx(ctx context.Context, a tcpSessionArgs) (map[st
 				return nil, errors.New("steps는 1~8개여야 합니다")
 			}
 			for i, step := range a.Steps {
-				data, err := tcpSessionPayload(tcpSessionArgs{SendHex: step.SendHex, SendText: step.SendText, AppendNewline: step.AppendNewline, Parts: step.Parts})
+				data, err := tcpSessionPayload(tcpSessionArgs{SendHex: step.SendHex, SendText: step.SendText, RESPArgs: step.RESPArgs, AppendNewline: step.AppendNewline, Parts: step.Parts})
 				if err != nil {
 					return nil, fmt.Errorf("steps[%d] (단계 %d): %w", i, i+1, err)
 				}
@@ -113,7 +124,7 @@ func (t *ToolSet) runTCPSessionEx(ctx context.Context, a tcpSessionArgs) (map[st
 			}
 		}
 		t.closeTCPSessionLocked()
-		conn, err := (&net.Dialer{Timeout: 4 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprint(a.Port)))
+		conn, err := t.dialTCPOnceAfterRefusal(ctx, host, a.Port)
 		if err != nil {
 			return nil, err
 		}
@@ -152,6 +163,7 @@ func (t *ToolSet) runTCPSessionEx(ctx context.Context, a tcpSessionArgs) (map[st
 					return nil, fmt.Errorf("steps[%d] 수신: %w", i, err)
 				}
 				result := tcpSessionResult("send", state, hex.EncodeToString(data))
+				result["send_encoding"] = tcpSessionEncoding(tcpSessionArgs{SendHex: a.Steps[i].SendHex, SendText: a.Steps[i].SendText, RESPArgs: a.Steps[i].RESPArgs, Parts: a.Steps[i].Parts})
 				result["step"] = i + 1
 				results = append(results, result)
 				if state.PeerClosed {
@@ -180,6 +192,7 @@ func (t *ToolSet) runTCPSessionEx(ctx context.Context, a tcpSessionArgs) (map[st
 				return nil, err
 			}
 			out := tcpSessionResult(action, state, hex.EncodeToString(payload))
+			out["send_encoding"] = tcpSessionEncoding(a)
 			out["initial_hex"] = hex.EncodeToString(initial.Data)
 			out["initial_text"] = tcpSessionText(initial.Data)
 			out["initial_bytes"] = len(initial.Data)
@@ -216,7 +229,9 @@ func (t *ToolSet) runTCPSessionEx(ctx context.Context, a tcpSessionArgs) (map[st
 		} else {
 			t.resetTCPSessionExpiryLocked()
 		}
-		return tcpSessionResult(action, state, hex.EncodeToString(payload)), nil
+		out := tcpSessionResult(action, state, hex.EncodeToString(payload))
+		out["send_encoding"] = tcpSessionEncoding(a)
+		return out, nil
 	case "read":
 		if t.tcpConn == nil {
 			return nil, errors.New("먼저 action=open으로 연결하세요")
@@ -238,6 +253,23 @@ func (t *ToolSet) runTCPSessionEx(ctx context.Context, a tcpSessionArgs) (map[st
 		return map[string]any{"action": action, "closed": true}, nil
 	default:
 		return nil, errors.New("action은 open, open_send, open_sequence, send, read, close 중 하나여야 합니다")
+	}
+}
+
+// send_encoding describes the tool input mode, not an inferred property of
+// arbitrary bytes. sent_hex remains the authoritative wire evidence.
+func tcpSessionEncoding(a tcpSessionArgs) string {
+	switch {
+	case len(a.RESPArgs) > 0:
+		return "resp_args"
+	case a.SendText != "":
+		return "send_text"
+	case a.SendHex != "":
+		return "send_hex"
+	case len(a.Parts) > 0:
+		return "parts"
+	default:
+		return "none"
 	}
 }
 
@@ -281,8 +313,17 @@ func tcpSessionPayload(a tcpSessionArgs) ([]byte, error) {
 	if len(a.Parts) != 0 {
 		configured++
 	}
+	if len(a.RESPArgs) != 0 {
+		configured++
+	}
 	if configured != 1 {
-		return nil, errors.New("send_hex, send_text, parts 중 정확히 하나만 지정하세요. 반복 입력 예: {\"parts\":[{\"repeat_hex\":\"41\",\"count\":88}],\"append_newline\":true (이때 send_text/send_hex 생략)")
+		return nil, errors.New("send_hex, send_text, parts, resp_args 중 정확히 하나만 지정하세요")
+	}
+	if len(a.RESPArgs) != 0 {
+		if a.AppendNewline {
+			return nil, errors.New("resp_args에는 append_newline을 사용할 수 없습니다")
+		}
+		return encodeRESPArgs(a.RESPArgs)
 	}
 	var payload []byte
 	if a.SendHex != "" {

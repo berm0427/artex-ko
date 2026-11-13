@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
@@ -10,12 +11,46 @@ func claimGuardToolResult(tool, summary string) db.Activity {
 	return db.Activity{Kind: "tool_result", Tool: tool, IsError: false, Summary: summary}
 }
 
+func TestFramingErrorCitedAsLuaRestriction(t *testing.T) {
+	const framing = "-ERR Protocol error: unbalanced quotes in request\r\n"
+	const integer = "-ERR value is not an integer or out of range\r\n"
+	const runtime = "-ERR Error running script: attempt to index a nil value (global 'io')\r\n"
+	tcp := func(raw string) db.Activity {
+		return db.Activity{
+			Kind: "tool_result", Tool: "tcp_session",
+			Detail: `{"received_hex":"` + hex.EncodeToString([]byte(raw)) + `"}`,
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		fact factItem
+		raw  string
+		want bool
+	}{
+		{"framing via rawget", factItem{Summary: "Lua 샌드박스가 rawget으로 io 접근 불가", EvidenceQuote: framing}, framing, true},
+		{"integer framing via rawget", factItem{Summary: "Lua sandbox blocks os via rawget", EvidenceQuote: integer}, integer, true},
+		{"empty quote bypass closed", factItem{Summary: "Lua 샌드박스가 rawget으로 io 접근 불가"}, framing, true},
+		{"genuine lua runtime never blocked", factItem{Summary: "Lua 샌드박스가 io 차단", EvidenceQuote: runtime}, runtime, false},
+		{"no sandbox claim", factItem{Summary: "Redis RESP framing 실패", EvidenceQuote: framing}, framing, false},
+		{"unqualified io not matched", factItem{Summary: "Lua sandbox blocks io", EvidenceQuote: framing}, framing, false},
+		{"quote mismatch", factItem{Summary: "Lua 샌드박스가 rawget으로 io 접근 불가", EvidenceQuote: "some other text"}, framing, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := framingErrorCitedAsLuaRestriction(tc.fact, []db.Activity{tcp(tc.raw)}); got != tc.want {
+				t.Fatalf("framingErrorCitedAsLuaRestriction() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDetectUngroundedObservedClaim(t *testing.T) {
 	const runtimeClaim = "로그인 폼이 /api/echo로 사용자 입력을 반환함"
 
 	static := []db.Activity{claimGuardToolResult("read", "app.py 소스 읽기 완료")}
 	succeeded := []db.Activity{static[0], claimGuardToolResult("bash", "HTTP/1.1 200 OK")}
 	failed := []db.Activity{claimGuardToolResult("bash", "error: connection refused")}
+	tcpDenied := []db.Activity{{Kind: "tool_result", Tool: "tcp_exchange", Detail: `{"received_bytes":9,"received_hex":"2d4e4f5045524d0d0a"}`}}
+	tcpEmpty := []db.Activity{{Kind: "tool_result", Tool: "tcp_session", Detail: `{"received_bytes":0,"received_hex":""}`}}
 
 	tests := []struct {
 		name           string
@@ -37,6 +72,26 @@ func TestDetectUngroundedObservedClaim(t *testing.T) {
 			confidence: "observed",
 			summary:    runtimeClaim,
 			activities: succeeded,
+		},
+		{
+			name:       "TCP denial is still a direct observation",
+			confidence: "observed",
+			summary:    "INFO 요청은 -NOPERM 응답을 반환함",
+			activities: tcpDenied,
+		},
+		{
+			name:           "empty TCP result is not an observation",
+			confidence:     "observed",
+			summary:        runtimeClaim,
+			activities:     tcpEmpty,
+			wantUngrounded: true,
+		},
+		{
+			name:           "errored TCP tool result is not an observation",
+			confidence:     "observed",
+			summary:        runtimeClaim,
+			activities:     []db.Activity{{Kind: "tool_result", Tool: "tcp_exchange", IsError: true, Detail: tcpDenied[0].Detail}},
+			wantUngrounded: true,
 		},
 		{
 			name:       "inferred confidence -> never ungrounded",
