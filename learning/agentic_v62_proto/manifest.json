@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "source": "agentic_v62_pivot",
+  "counts": {
+    "train": 330,
+    "action": 298,
+    "compaction": 8,
+    "decision": 24
+  },
+  "composition": {
+    "v61_base": 325,
+    "v62_blocked_version_search": 5
+  },
+  "training_intent": "epochs<=2; when version-confirm is BLOCKED (NOPERM / hidden banner / empty response) do NOT idle or repeat the version probe — search with the service name + observed restriction at 'unknown version', or report the blocker and advance; general HTTP(nginx)/SSH(OpenSSH) analogues + one service-agnostic decision row; evaluate on untouched holdout"
+}
