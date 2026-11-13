@@ -122,8 +122,34 @@ func (t *ToolSet) checkFactGrounding(it factItem, defaultIntent int64) error {
 	}
 	acts, _, err := t.ts.ActivityPage(db.ActivitySessionFilter{NodeID: &intentID}, 0, 600)
 	if err != nil {
-		return nil
+		return nil // don't block a fact when its intent's activity read fails
 	}
+	t.hydrateTCPActivityDetail(acts)
+	// Framing-error guard stays scoped to the REFERENCED intent only, so another
+	// intent's activities can neither mask nor wrongly trigger it.
+	if framingErrorCitedAsLuaRestriction(it, acts) {
+		return fmt.Errorf("인용한 응답은 RESP 프레이밍 오류(-ERR Protocol error / not an integer)입니다. Lua 샌드박스 제한의 근거로 기록하지 말고 resp_args로 다시 요청해 실제 실행 응답을 확인하세요")
+	}
+	reason, ungrounded := detectUngroundedObservedClaim(it.Confidence, it.Summary, it.Detail, acts)
+	// A worker sometimes mis-tags intent_id (points at a stale intent). ONLY when
+	// the referenced intent fails to ground the claim, fall back to the CURRENT
+	// intent's activities before rejecting — a targeted fallback that leaves the
+	// correctly-tagged common case unchanged.
+	if ungrounded && defaultIntent > 0 && defaultIntent != intentID {
+		if dacts, _, derr := t.ts.ActivityPage(db.ActivitySessionFilter{NodeID: &defaultIntent}, 0, 600); derr == nil {
+			t.hydrateTCPActivityDetail(dacts)
+			reason, ungrounded = detectUngroundedObservedClaim(it.Confidence, it.Summary, it.Detail, dacts)
+		}
+	}
+	if ungrounded {
+		return fmt.Errorf("%s 실제로 대상에 요청·실행해 응답을 확인한 뒤 observed로 기록하거나, 미관측 추론이면 confidence를 inferred로 낮추고 다음 검증 동작을 제시하세요", reason)
+	}
+	return nil
+}
+
+// hydrateTCPActivityDetail fills each TCP tool_result's Detail from storage so the
+// grounding checks can read the raw response bytes.
+func (t *ToolSet) hydrateTCPActivityDetail(acts []db.Activity) {
 	for i := range acts {
 		if acts[i].Kind != "tool_result" || acts[i].IsError {
 			continue
@@ -136,13 +162,6 @@ func (t *ToolSet) checkFactGrounding(it factItem, defaultIntent int64) error {
 			acts[i].Detail = detail
 		}
 	}
-	if framingErrorCitedAsLuaRestriction(it, acts) {
-		return fmt.Errorf("인용한 응답은 RESP 프레이밍 오류(-ERR Protocol error / not an integer)입니다. Lua 샌드박스 제한의 근거로 기록하지 말고 resp_args로 다시 요청해 실제 실행 응답을 확인하세요")
-	}
-	if reason, ungrounded := detectUngroundedObservedClaim(it.Confidence, it.Summary, it.Detail, acts); ungrounded {
-		return fmt.Errorf("%s 실제로 대상에 요청·실행해 응답을 확인한 뒤 observed로 기록하거나, 미관측 추론이면 confidence를 inferred로 낮추고 다음 검증 동작을 제시하세요", reason)
-	}
-	return nil
 }
 
 // framingErrorCitedAsLuaRestriction rejects a fact that claims a Lua sandbox
