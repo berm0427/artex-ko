@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "source": "agentic_v63_pivot",
+  "counts": {
+    "train": 335,
+    "action": 302,
+    "compaction": 8,
+    "decision": 25
+  },
+  "composition": {
+    "v62_base": 330,
+    "v63_planner_noidle": 5
+  },
+  "training_intent": "epochs<=2; PLANNER must not return empty/idle on a live open goal after a dead-ended intent — add_intent to pivot (direct worker to web_search the blocked version's advisory, or probe an unexplored avenue), or prove_goal to formally conclude only when evidence is exhausted; redis + general web/ssh analogues + one planner decision row; evaluate on untouched holdout"
+}
