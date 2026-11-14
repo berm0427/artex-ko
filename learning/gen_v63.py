@@ -115,7 +115,7 @@ def main():
          "배너 재수신으로 추가 정보 없음, 의도 완료"],
         [{"id": 7131, "kind": "intent", "state": "done", "summary": "배너/프로토콜 정리, 버전 미확인"}],
         "add_intent",
-        {"summary": "배너를 다시 읽지 말고, 관측된 인증 동작과 프로토콜로 해당 SSH 서비스 부류의 공개 보안 지침을 web_search로 조사하거나 인증 경로를 넓히는 의도를 수행한다", "priority": 6},
+        {"summary": "배너를 다시 읽지 말고, 확인된 프로토콜(SSH)과 서비스 부류로 해당 SSH 구현의 공개 보안 지침을 web_search로 조사하거나 아직 안 본 인증 경로를 점검하는 의도를 수행한다", "priority": 6},
         "planner_pivot_general_ssh")
 
     # 5) DECISION row: the general rule — a live open goal + a dead-ended intent must
@@ -128,8 +128,9 @@ def main():
                      {"role": "user", "content": "상황: 목표가 미달성인데 직전 의도가 성과 없이 완료되고 진행 중인 의도가 없다. 다음 회차에서 플래너가 지켜야 할 원칙을 한 문장으로 정하라."}],
         "completion": ("직전 의도가 성과 없이 끝났더라도 목표가 열려 있으면 빈손으로 멈추거나 같은 관측을 "
                        "반복하게 하지 말고, 아직 안 본 공격 경로를 겨냥한 add_intent를 내거나 막힌 지점을 "
-                       "공개 정보 조사(worker web_search)로 우회하는 add_intent를 내며, 모든 경로가 소진되고 "
-                       "증거로 더 나아갈 수 없을 때만 prove_goal로 한계를 명시해 공식 종결한다."),
+                       "공개 정보 조사(worker web_search)로 우회하는 add_intent를 낸다. 실제 증거로 달성이 "
+                       "입증된 목표가 있을 때만 prove_goal로 표시하며, 모든 경로가 소진되면 사실을 날조하지 "
+                       "말고 남은 검증 방향이 없다는 판단과 근거를 기록한 뒤 새 의도 생성을 멈춘다."),
         "tools": copy.deepcopy(tools),
     })
 
