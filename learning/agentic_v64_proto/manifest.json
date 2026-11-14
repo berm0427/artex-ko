@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "source": "agentic_v64_worker",
+  "counts": {
+    "train": 340,
+    "action": 306,
+    "compaction": 8,
+    "decision": 26
+  },
+  "composition": {
+    "v63_base": 335,
+    "v64_worker_depth": 5
+  },
+  "training_intent": "epochs<=2; WORKER on the real ~9594-char worker system: when the assigned intent asks for deeper probing, a single benign call is NOT completion — escalate within the intent (io/os capability probe, deeper request), web_search when a check is blocked, frame benign success as a milestone (not goal completion), exhaust the intent's depth before stopping; redis + general web analogue + milestone record_fact + decision row; untouched holdout"
+}
