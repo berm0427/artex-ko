@@ -36,6 +36,8 @@ type Planner struct {
 	workDir           string                                 // shared work dir (surfaced in prompt as artifact-output target)
 	injectConstraints func() bool                            // resolver: inject task operation constraints into system prompt? (nil = yes)
 	nonStreamingFn    func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
+	localModelFn      func() bool                            // task-router hides the actual model name
+	localAdapterFn    func() bool                            // broader: any locally-served adapter (gates the cross-round breaker)
 	noaEnabledFn      func() bool                            // resolver: use experimental noa compaction? (nil = off)
 	maxTokensFn       func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
 	compactor         *Compactor                             // cold-node compaction (§7); nil = disabled
@@ -63,6 +65,24 @@ func (p *Planner) SetCompactor(c *Compactor) { p.compactor = c }
 // model path (true = non-streaming). nil/unset = streaming (default).
 func (p *Planner) SetNonStreaming(fn func() bool) { p.nonStreamingFn = fn }
 
+// SetLocalModel identifies the active model behind a task-router provider.
+func (p *Planner) SetLocalModel(fn func() bool) { p.localModelFn = fn }
+
+// SetLocalAdapter wires a broader resolver: whether the active profile is one of
+// our locally-served fine-tuned adapters, including ones NOT tagged "qwen3" in
+// their profile name (artex-agentic-*, artex-general-*). It gates ONLY the
+// cross-round repeat breaker, so it never changes turn caps, streaming or
+// no-think (those stay on the narrower qwen3 signal). nil = fall back to
+// isLocalModel.
+func (p *Planner) SetLocalAdapter(fn func() bool) { p.localAdapterFn = fn }
+
+// breakerEnabled gates the cross-round repeat breaker: any local model (tagged or
+// router-hidden) or any locally-served adapter. Hosted models keep only the
+// advisory progress-audit path.
+func (p *Planner) breakerEnabled() bool {
+	return p.isLocalModel() || (p.localAdapterFn != nil && p.localAdapterFn())
+}
+
 func (p *Planner) nonStreaming() bool { return p.nonStreamingFn != nil && p.nonStreamingFn() }
 
 // SetNoaEnabled wires a resolver deciding whether runs use the experimental noa
@@ -79,6 +99,35 @@ func (p *Planner) maxTokens() int {
 		return 0
 	}
 	return p.maxTokensFn()
+}
+
+// isLocalModel reports whether the active planner model is one of the small local
+// models (directly, or hidden behind the task-router). Local models are the ones
+// that ignore advisory anti-loop text, so the hard cross-round breaker is gated on
+// this, same as the per-round turn cap.
+func (p *Planner) isLocalModel() bool {
+	return (p.localModelFn != nil && p.localModelFn()) || strings.Contains(strings.ToLower(p.model), "artex-qwen3")
+}
+
+func (p *Planner) turnsPerRound() int {
+	// Bound the per-round turn budget for ANY locally-served adapter, not just
+	// artex-qwen3-tagged models. An untagged local adapter (e.g. artex-agentic-v34)
+	// is not isLocalModel, so it used to fall through to the unbounded path and
+	// spam one read (list_intents) ~90×/round, ignoring the per-round seen-guard's
+	// advisory error. breakerEnabled() is the same broad local-adapter signal.
+	if p.breakerEnabled() {
+		if p.maxTurns > 0 && p.maxTurns < 4 {
+			return p.maxTurns
+		}
+		return 4
+	}
+	if p.maxTurns > 0 {
+		return p.maxTurns
+	}
+	// An unbounded read-only loop consumed an entire 90-minute local-model
+	// task without producing a new intent. Bound one round, not the task:
+	// future graph changes can still wake the planner with fresh evidence.
+	return 0
 }
 
 func (p *Planner) compactionWindow() int {
@@ -300,8 +349,8 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 任务目标：{{.Goal}}
 
 **本轮该产出几个意图（先想清楚这条）**：
-- **硬底线（最高优先）**：只要【目标未达成】且【当前没有任何 open 或 running 意图】（frontier_open=0 且 running_intents 为空），本轮就【必须】产出至少一个向目标推进的意图——没有在跑的 work 可等、也没有在排队的方向时，产出 0 意图=任务停摆；哪怕已知方向都只在 recent_done 里，也要据下面 done/exhausted/blocked 的判断另开一条或续派一条。
-- 硬底线之外，**产出 0 个意图是正常结果，但要有正当理由**（不是"少派更稳"的默认）：①**已覆盖**——你想到的方向都已被仍在 open/running 的意图处理（换措辞重复生成已存在的意图是严重错误）；②**等待依赖**——下一步依赖当前在跑 work 的产出、而它还没出来（此时硬派会让下游拿不到前置而空转，应等下次唤醒图更新后再派）。
+- 目标未达成且没有 open/running 意图时，先核对已有实验、原始观察和新证据；只有能提出与旧实验可区分的检验时才创建新意图。没有新检验时，记录已确认的限制和需要的输入，0 个意图是有效结果。
+- **产出 0 个意图是正常结果，但要说明理由**：①**已覆盖**——你想到的方向都已被 open/running 或有充分否定证据的已完成意图处理；②**等待依赖**——下一步依赖当前在跑 work 的产出；③**缺少可区分的新检验**——现有候选只会重复同一输入或同一观察。
 - 反过来：确有【未覆盖、且不依赖在跑 work】的新方向，或目标未达成且范围内仍有未测面，就该派——别把 0 意图当偷懒的默认。
 
 **每次唤醒的决策流程**：
@@ -326,7 +375,7 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
      · **done（正常跑完）**：已覆盖 → 不原样重派；是否死路看它 yields 出的 fact 结论、而非 state；仅出现【材料性新机理】（新事实/资产/参数/明显不同的打法）才重派，且 summary 写清与上次的不同；换措辞、"再试一次说不定行"不算，禁止重试。
      · **exhausted（预算耗尽、探到一半被掐断，只写回部分）/ blocked（模型或网络失败、基本没探成）**：都是中途没善终、信息不全——先用 get_worker_trace / get_worker_output 看它实际做到哪、卡在哪，再从下列里选：接近突破被预算掐 → 派"接上次进度继续"；纯外部故障没跑成（blocked 常是）→ 直接重派同方向；每次卡同一处 → 换打法/方向。依据永远是 trace 里的真实进度，不是 state 本身。
    - 完全无任何意图覆盖的全新方向 → 生成。
-   - 所有已知方向都被仍在 open/running 的意图覆盖 → 不生成、直接结束（有在跑/在排队的 work，等它们推进）；但若只剩 recent_done 覆盖、已无 open/running 而目标未达成 → 按顶部硬底线必须另开或续派。
+   - 所有已知方向都被仍在 open/running 的意图覆盖 → 不生成、直接结束（有在跑/在排队的 work，等它们推进）；若只剩 recent_done 覆盖、已无 open/running 而目标未达成 → 先核对是否有不同的新检验；没有则记录限制，不重派同一方向。
    - **深度优先于覆盖度**：coverage 是下限/验收项、不是探索目标本身；发现高价值入口（可能通向 RCE/提权/数据外泄）后，优先派意图把那条路【往深打穿】，而不是为拉平覆盖度去铺广、逐个资产浅测。
    - **保持路线多样、别过早收敛**：目标未达成时，若现有意图都挤在同一条路线/入口，而存在【本质不同】的未覆盖方向（另一入口面/另一类资产/另一条利用链），优先补那条分歧方向，而不是在同一线上加同义意图（看实质差异，不看措辞）；若该分歧方向已被现有意图覆盖，仍不生成。理想是 2–3 条机理不同的路线并存（如"从上传链打"与"从认证绕过打"），某条交出【目标逼近】的证据后才把资源集中过去。**但多样性永远服从顶部【操作约束】**：被约束排除的入口面/端口/主机/操作，即使本质不同也绝不生成意图。
 
@@ -337,15 +386,34 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
    - **asset_ids**：本方向要测试/攻击的目标资产 id（尽量传，0/1/多个，来自 list_assets）——只要方向围绕具体资产（站点/接口/参数/主机）就务必传，用于覆盖去重、连入资产链路，跨多资产就都传；纯全局侦察无具体资产才留空。
    - **parent_ids**：本方向由哪些上游节点综合得出（可选，0/1/多个）——多个事实结合产生一个意图就都传，派生自某上游意图/发现也传其 id，顶层全新方向留空。
 
-不重复、不硬凑；但目标未达成、又有未覆盖且更深的打法时，该派就派。简洁、聚焦、高效。`
+不重复、不硬凑；但目标未达成、又有未覆盖且更深的打法时，该派就派。简洁、聚焦、高效。
+
+**串行依赖路线不要拆成并行**：同一假设的只读前置确认、局部实验、据结果的后续确认放进**一个**意图，让执行者按条件接续；前置失败就立即收尾，只有需要新假设时才建下一个意图。只对相互独立的维度使用并行意图。
+`
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
+	body = migrateLegacyPlannerFrontierRule(body)
 	// Existing installations may have an editable stored prompt with the old
 	// mandatory frontier-refill rule. Keep this anti-loop rule code-owned.
 	body += "\n\n**중복 실험 방지(다른 의도 생성 지침보다 우선)**: open/running 의도가 0개이고 목표가 미달성이어도 새 근거와 기존 실행과 구별되는 입력·상태·예상 관찰이 없으면 add_intent를 호출하지 마세요. 새 의도를 만들기 전에는 graph_overview의 최근 창뿐 아니라 list_intents(q/before)로 관련 과거 의도를 검색하고 해당 결과를 확인하세요. 같은 실험을 표현·횟수만 바꿔 반복하지 마세요. 새 실험의 가설, 성공 기준, 중단 기준을 구체적으로 밝히세요. 새 방향을 입증할 수 없거나 외부 입력을 기다린다면 의도를 만들지 않고 그 이유를 보고하세요."
 	body += "\n\n**미확인 입력 서비스의 후속 계획**: 서버가 `Input:` 같은 프롬프트만 보내고 이전 문자열 입력에 차이가 없었다면, `help`·`flag`·`status` 등 단어만 바꾼 의도를 새로 만들지 마세요. 기존 도구 출력에서 실제 전송 바이트·수신 바이트·연결 종료를 확인하고, 다음 의도에는 한 번에 한 변수만 바꾸는 입력 길이·종결 방식·동일 연결의 단계 변화처럼 이전 시도와 구별되는 검증 질문 및 관찰 기준을 명시하세요. 단순 무응답은 취약점 부재나 목표 달성의 증거가 아닙니다. 새로운 검증 질문을 만들 수 없다면 그 한계를 명확히 기록하세요."
-	return body + artifactSpec(workDir) + evidenceLedMethodRule + serviceProtocolEvidenceRule + serviceProgressRule + hypothesisCoverageRule + platformShellDirective() + langDirective()
+	return body + artifactSpec(workDir) + evidenceLedMethodRule + platformShellDirective() + langDirective()
+}
+
+// Stored planner prompts predate evidence-based admission. Remove the two
+// conflicting mandatory-refill clauses from an otherwise user-editable prompt;
+// this migration preserves every unrelated customization.
+func migrateLegacyPlannerFrontierRule(body string) string {
+	const oldOpening = "- **硬底线（最高优先）**：只要【目标未达成】且【当前没有任何 open 或 running 意图】（frontier_open=0 且 running_intents 为空），本轮就【必须】产出至少一个向目标推进的意图——没有在跑的 work 可等、也没有在排队的方向时，产出 0 意图=任务停摆；哪怕已知方向都只在 recent_done 里，也要据下面 done/exhausted/blocked 的判断另开一条或续派一条。"
+	const newOpening = "- 目标未达成且没有 open/running 意图时，先核对已有实验、原始观察和新证据；只有能提出与旧实验可区分的检验时才创建新意图。没有新检验时，记录已确认的限制和需要的输入，0 个意图是有效结果。"
+	const oldZero = "- 硬底线之外，**产出 0 个意图是正常结果，但要有正当理由**（不是\"少派更稳\"的默认）：①**已覆盖**——你想到的方向都已被仍在 open/running 的意图处理（换措辞重复生成已存在的意图是严重错误）；②**等待依赖**——下一步依赖当前在跑 work 的产出、而它还没出来（此时硬派会让下游拿不到前置而空转，应等下次唤醒图更新后再派）。"
+	const newZero = "- **产出 0 个意图是正常结果，但要说明理由**：①**已覆盖**——你想到的方向都已被 open/running 或有充分否定证据的已完成意图处理；②**等待依赖**——下一步依赖当前在跑 work 的产出；③**缺少可区分的新检验**——现有候选只会重复同一输入或同一观察。"
+	const oldDone = "但若只剩 recent_done 覆盖、已无 open/running 而目标未达成 → 按顶部硬底线必须另开或续派。"
+	const newDone = "若只剩 recent_done 覆盖、已无 open/running 而目标未达成 → 先核对是否有不同的新检验；没有则记录限制，不重派同一方向。"
+	body = strings.ReplaceAll(body, oldOpening, newOpening)
+	body = strings.ReplaceAll(body, oldZero, newZero)
+	return strings.ReplaceAll(body, oldDone, newDone)
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
@@ -368,22 +436,80 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		tsx.SetAssetStore(as, as.Companies())
 	}
 	tsx.SetTaskID(taskID)
+	if ReviewedIntentProvider != nil {
+		candidates, reviewErr := ReviewedIntentProvider(ctx, taskID)
+		if reviewErr != nil {
+			return false, "reviewed_intent_provider_error", reviewErr
+		}
+		if candidates != nil {
+			if reviewErr := tsx.SetReviewedIntentCandidates(candidates); reviewErr != nil {
+				return false, "reviewed_intent_candidates_invalid", reviewErr
+			}
+		}
+	}
 	tsx.SetCoverageEnabled(as == nil || as.CoverageEnabled(taskID))
 	tsx.killWork = p.killWork   // enable kill_work tool (nil = unavailable)
 	tsx.steerWork = p.steerWork // enable steer_work tool (nil = unavailable)
 	if origin, _ := ts.OriginFactID(); origin > 0 {
 		tsx.SetOwnerNode(origin) // planner-side anchors default to the task root (origin fact)
 	}
+	// Cross-round circuit-breaker: if this local planner has been re-issuing the
+	// same read across rounds with no new evidence, force a wind-down round — drop
+	// add_intent so it cannot spawn another duplicate, and inject the hard directive
+	// into the situational block below. Gated to local models (advisory text is
+	// enough for hosted ones).
+	stallTool, stalled := crossRoundRepeatStall(ts)
+	// Distinguish a FRESH-task first-commit stall from an exhausted re-poll. When the
+	// planner loops an inventory read (list_intents / graph_overview …) across rounds
+	// but the frontier is still EMPTY (no intent was ever committed), winding down
+	// would wrongly conclude a task that never ran. Instead FORCE THE FIRST COMMIT:
+	// drop the inventory reads this round so it cannot re-poll, keep add_intent, and
+	// direct it to submit the first experiment. NOT gated on breakerEnabled — a
+	// router-hidden/hosted "artex-planner" model loops here too (the wind-down path is).
+	forceCommit := false
+	if stalled && crossRoundInventoryTools[stallTool] {
+		// No ACTIVE intent (fresh task, OR every prior intent already finished) while a
+		// goal is open and the planner keeps re-polling inventory = it is idling instead
+		// of committing the next experiment. Force the commit so the frontier advances.
+		if active, aerr := ts.HasActiveIntent(); aerr == nil && !active {
+			if open, oerr := ts.HasOpenGoal(); oerr != nil || open {
+				forceCommit = true
+			}
+		}
+	}
+	forceWindDown := stalled && !forceCommit && p.breakerEnabled()
 	// 领域工具 + 基础默认工具集（Read/Write/Edit/MultiEdit/LS/Glob/Grep/Bash）
 	// 资产覆盖度功能关闭时剔除 add_task_scope/list_untested_assets（不入 prompt）。
 	base := append(tsx.DropCoverageTools(tsx.PlannerTools()), actool.DefaultTools()...)
+	if forceWindDown {
+		base = dropToolByName(base, "add_intent")
+	}
+	if forceCommit {
+		// Strip the inventory reads so the planner cannot re-poll an empty frontier
+		// again this round; add_intent stays, making the first commit the only
+		// productive move.
+		for name := range crossRoundInventoryTools {
+			base = dropToolByName(base, name)
+		}
+	}
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts)})
 	tools, def, cleanup := AugmentTools(ctx, "planner", base)
+	def = deferNonCoreTools(tools, def, plannerCoreTools)
 	defer cleanup()
 	// 关键态势（刚完成的意图 + 预取的完整图）改放【本轮 user 输入】(见下方 input)，system
 	// 只留静态规划正文。move-out 让 system 每轮稳定、更利于缓存；代价是若单轮变长，态势可能
 	// 被 compaction 压缩（planner 单轮通常短，风险低）。situational 会拼进下方 input。
-	situational := renderTriggers(ts, triggers) + renderGraphOverview(tsx.graphOverviewData()) + recentProgressAudit(ts)
+	overviewData := tsx.graphOverviewData()
+	situational := renderTriggers(ts, triggers) + renderGraphOverview(overviewData) + renderGoalStageLedger(overviewData) + recentProgressAudit(ts) + renderEvidenceContinuity(overviewData, p.workDir, taskID)
+	if forceWindDown {
+		situational += "\n\n【교차회차 반복 정체(도구 기록 기반, 이번 회차 강제 적용)】: " + crossRoundStallDirective(stallTool)
+	}
+	if forceCommit {
+		situational += "\n\n【의도 미커밋 정체(이번 회차 강제 적용)】: 진행 중인 의도(intent)가 하나도 없고 목표가 열려 있는데 list_intents·graph_overview 등 조회만 반복하고 있습니다. 조회 결과를 더 볼 필요가 없습니다(이번 회차 도구 목록에서 조회 도구 제외됨). 이번 회차에 반드시 add_intent로 다음 탐색 방향 하나를 제출하세요 — 직전 발견과 열린 목표에서 도출한, 아직 시험하지 않은 경로(바꿀 변수 하나와 기대 관찰이 분명한 구체적 실험)여야 합니다. 같은 관찰을 반복하는 의도는 금지합니다."
+	}
+	if tsx.reviewedIntents != nil {
+		situational += reviewedCandidatePrompt(tsx.reviewedIntents)
+	}
 	// 任务级 deadline / 终局模式(经 ctx 注入,见 taskclock.go)。终局那一轮把任务超时
 	// planner 收尾词作为【本轮操作指令】拼进本轮 user 输入(随 situational),让它只做最后
 	// 目标判定、不产新意图。
@@ -430,8 +556,8 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		BashEnv:               proxyEnv(p.proxyAddr, p.proxyCACert), // Bash 子命令默认走代理+信任 CA
 		WorkingDir:            taskDir,                              // 本任务工作目录 <workDir>/tasks/<taskID>
 		ToolOutputDir:         cmdOutDir(taskDir),
-		MaxTurns:              p.maxTurns, // 0 = unlimited (configurable in agent management)
-		MaxDuration:           maxDur,     // 0=不限;有 deadline 时=距 deadline 剩余
+		MaxTurns:              p.turnsPerRound(),
+		MaxDuration:           maxDur, // 0=不限;有 deadline 时=距 deadline 剩余
 		Compaction:            compactionConfig(p.compactionWindow()),
 		// 跨唤醒共享的规划待办：让串行链在多轮之间保留（session 是新的，store 不是）。
 		Todos: p.todoFor(ts.ID()),
@@ -461,8 +587,13 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 			lead = "이번 회차는 정기 점검이며 현재 open/running 의도가 전혀 없습니다. 목표 달성 여부와 새 근거가 있는지 판단하세요. 이미 시험한 방향만 남았다면 list_intents로 확인하고 새 의도를 만들지 말고, 필요한 다음 입력이나 장애물을 보고하세요:"
 		}
 	}
-	input := lead + situational + "\n\n위 현황을 바탕으로 목표를 판정하세요. 성과나 취약점이 실제로 확인되어 목표가 달성되었다면 prove_goal로 하나씩 표시하세요. **새 방향은 이전과 구별되는 근거·검증 질문이 있을 때만 만드세요. frontier_open=0이어도 동일 실험의 반복만 가능하다면 0개를 제출하고 그 한계 또는 기다리는 입력을 보고하세요.**" +
-		renderPlannerTodos(opts.Todos.List())
+	input := lead + situational + "\n\n위 현황을 바탕으로 목표를 판정하세요. 성과나 취약점이 실제로 확인되어 목표가 달성되었다면 prove_goal로 하나씩 표시하세요."
+	if tsx.reviewedIntents != nil {
+		input += " 검토 후보는 근거와 반증 조건을 갖춘 다음 검사입니다. 아직 실행하지 않은 후보가 필요하다면 select_reviewed_intent에 candidate_id만 제출하세요. 그 검사의 원시 응답은 worker가 실행한 뒤 기록합니다. 이미 처리한 후보만 남았다면 0개를 제출하세요."
+	} else {
+		input += " **새 방향은 이전과 구별되는 근거·검증 질문이 있을 때만 만드세요. frontier_open=0이어도 동일 실험의 반복만 가능하다면 0개를 제출하고 그 한계 또는 기다리는 입력을 보고하세요.**"
+	}
+	input += renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
 	_, _, err = captureRun(ctx, opts, input,
@@ -472,5 +603,16 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 				emit(r)
 			}
 		})
+	if tsx.reviewedIntents != nil && emit != nil {
+		counts := tsx.ReviewedIntentDecisions()
+		metadata, _ := json.Marshal(map[string]any{
+			"candidate_count": len(tsx.reviewedIntents),
+			"selected":        counts.Selected, "rejected": counts.Rejected,
+			"persisted": counts.Persisted, "model_error": err != nil,
+		})
+		emit(db.Activity{Worker: "planner", Kind: "reviewed_intent_audit",
+			Summary:  fmt.Sprintf("검토 후보 선택 %d · 형식/ID 거부 %d · 등록 %d", counts.Selected, counts.Rejected, counts.Persisted),
+			Metadata: metadata})
+	}
 	return tsx.GoalMet, tsx.Reason, err
 }
