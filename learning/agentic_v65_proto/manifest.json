@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "source": "agentic_v65_diversify",
+  "counts": {
+    "train": 345,
+    "action": 310,
+    "compaction": 8,
+    "decision": 27
+  },
+  "composition": {
+    "v64_base": 340,
+    "v65_diversify": 5
+  },
+  "training_intent": "epochs<=2; PLANNER must not re-propose an intent that only re-confirms an already-observed fact (dedup rejects it → idle); after a capability/recon observation, add_intent a DISTINCT next step that builds on it (version-confirm → web_search when blocked → unexplored avenue); redis + general web analogue + one decision row; evaluate on untouched holdout"
+}
